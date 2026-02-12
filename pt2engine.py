@@ -1,15 +1,17 @@
 import os
 import re
-import sys
+import gc
 import time
 import json
 import torch
 import shutil
+import psutil
+import textwrap
 import argparse
+import threading
 import subprocess
 import tensorrt_llm
 import torch.nn as nn
-import torch.nn.functional as F
 
 from transformers import AutoModel
 from tensorrt_llm.mapping import Mapping
@@ -19,20 +21,127 @@ from tensorrt_llm.quantization import QuantAlgo
 from tensorrt_llm.models import QWenForCausalLM
 from tensorrt_llm.models.qwen.convert import load_hf_qwen
 from tensorrt_llm.models.modeling_utils import QuantConfig
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 MODEL_CKPT_MAP = {
     'InternVL3-1B': 'OpenGVLab/InternVL3-1B',
+    'InternVL3-2B': 'OpenGVLab/InternVL3-2B',
+    'InternVL3_5-1B': 'OpenGVLab/InternVL3_5-1B',
 }
 
 assert (MODEL_NAME := 'InternVL3-1B') in list(MODEL_CKPT_MAP.keys())
+NUM_FRAMES = 1
+LLM_BATCH_SIZE = 1
+VIS_BATCH_SIZE = NUM_FRAMES # if small enough, can do i in one run, NUM_FRAMES * LLM_BATCH_SIZE
+MAX_MULTIMODAL_LEN = 256 * NUM_FRAMES * LLM_BATCH_SIZE # total image len (sum of whole batch)
+MAX_INPUT_LEN = 256 * NUM_FRAMES + 100 # input text length (for each batch)
+MAX_SEQ_LEN = MAX_INPUT_LEN + 500 # output text length (for each batch)
 
-MODEL_CKPT_PATH = MODEL_CKPT_MAP[MODEL_NAME]
-ONNX_PATH = os.path.join(os.getcwd(), f"models/{MODEL_NAME}/{MODEL_NAME}_vis.onnx")
-VIS_ENGINE_PATH = os.path.join(os.getcwd(), f"models/{MODEL_NAME}/{MODEL_NAME}_vis_engine")
-LLM_ENGINE_PATH = os.path.join(os.getcwd(), f"models/{MODEL_NAME}/{MODEL_NAME}_llm_engine")
+PP_SIZE = 1
+WORKERS = 1
+USE_WEIGHT_ONLY = False
+assert (WEIGHT_ONLY_PRECISION := 'int8') in ['int8', 'int4', 'int4_gptq']
+assert (GEMM_PLUGIN := 'disable') in ['auto', 'float16', 'float32', 'bfloat16', 'int32', 'fp8', 'disable']
+assert (DTYPE := 'bfloat16') in ['float32', 'bfloat16', 'float16']
+assert (CONTEXT_FMHA := 'enable') in ['enable', 'disable'] # enabling it can speed up? and dont take memory, weird
+assert (MOE_PLUGIN := 'disable') in ['auto', 'float16', 'float32', 'bfloat16' , 'int32' , 'disable']
+assert (PAGED_KV_CACHE := 'enable') in ['enable', 'disable']
+assert (MAMBA_CONV1D_PLUGIN := 'disable') in ['auto', 'float16', 'float32', 'bfloat16', 'int32', 'disable']
+assert (GPT_ATTENTION_PLUGIN := 'auto') in ['auto', 'float16', 'float32', 'bfloat16', 'int32', 'disable']
+assert (REMOVE_INPUT_PADDING := 'disable') in ['enable', 'disable'] # reduddant in batch size == 1 scenario
 
-os.makedirs(f"models/{MODEL_NAME}/", exist_ok=True)
+def monitor_memory(proc, results):
+    """Monitors the memory usage of a process and all its children."""
+    peak_rss = 0
+    peak_vms = 0
+    start_time = time.time()
+    try:
+        # Create a psutil process object
+        p = psutil.Process(proc.pid)
+        while proc.poll() is None:  # While process is still running
+            # Get memory for parent + all recursive children
+            total_rss = p.memory_info().rss
+            total_vms = p.memory_info().vms
+            
+            for child in p.children(recursive=True):
+                try:
+                    child_info = child.memory_info()
+                    total_rss += child_info.rss
+                    total_vms += child_info.vms
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            
+            # Update peaks
+            peak_rss = max(peak_rss, total_rss)
+            peak_vms = max(peak_vms, total_vms)
+            
+            time.sleep(0.1)
+    except psutil.NoSuchProcess:
+        pass
+    
+    results['peak_rss_gb'] = peak_rss / (1024**3)
+    results['peak_vms_gb'] = peak_vms / (1024**3)
+    results['elapsed_time'] = int(time.time() - start_time)
+
+def monitor_pid_memory(pid, results, stop_event):
+    """Monitors memory for a specific PID until stop_event is set."""
+    peak_rss = 0
+    peak_vms = 0
+    start_time = time.time()
+    try:
+        p = psutil.Process(pid)
+        while not stop_event.is_set():
+            total_rss = p.memory_info().rss
+            total_vms = p.memory_info().vms
+            
+            for child in p.children(recursive=True):
+                try:
+                    child_info = child.memory_info()
+                    total_rss += child_info.rss
+                    total_vms += child_info.vms
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            
+            peak_rss = max(peak_rss, total_rss)
+            peak_vms = max(peak_vms, total_vms)
+            time.sleep(0.1) 
+    except psutil.NoSuchProcess:
+        pass
+    
+    results['peak_rss_gb'] = peak_rss / (1024**3)
+    results['peak_vms_gb'] = peak_vms / (1024**3)
+    results['elapsed_time'] = int(time.time() - start_time)
+
+def overview(vis2onnx_build, vis2engine_build, llm2engine_build):
+    print("\n" + "="*50)
+    print("       CONVERSION PROCESS SUMMARY OVERVIEW")
+    print("="*50)
+
+    # Define the stages and their corresponding result dicts
+    stages = [
+        ("Vision to ONNX", vis2onnx_build),
+        ("Vision to Engine (trtexec)", vis2engine_build),
+        ("LLM to Engine (trtllm-build)", llm2engine_build)
+    ]
+
+    # Header
+    print(f"{'Stage':<30} | {'Status':<10} | {'Time':<8} | {'Peak RSS'} | {'Peak VMS'}")
+    print("-" * 70)
+
+    for name, results in stages:
+        if results.get('skip'):
+            status = "SKIPPED"
+            time_str = "N/A"
+            rss_str = "N/A"
+            vms_str = "N/A"
+        else:
+            status = "DONE"
+            time_str = f"{results.get('elapsed_time', 0)}s"
+            rss_str = f"{results.get('peak_rss_gb', 0):.2f} GB"
+            vms_str = f"{results.get('peak_vms_gb', 0):.2f} GB"
+        
+        print(f"{name:<30} | {status:<10} | {time_str:<8} | {rss_str} | {vms_str}")
+
+    print("="*70)
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Convert Torch to Engine for VLM.")
@@ -53,7 +162,17 @@ def parse_arguments():
     
     parser.add_argument("--no-llm-engine",
                         action="store_true",
-                        help="No need to convert language part of VLM to ONNX")
+                        help="No need to convert language part of VLM to ENGINE")
+
+    parser.add_argument('--num_frames',
+                        type=int,
+                        default=NUM_FRAMES,
+                        help='Number of Frames')
+
+    parser.add_argument('--vis_batch_size',
+                        type=int,
+                        default=VIS_BATCH_SIZE,
+                        help='Batch size for the vision engine')
 
     # For Converting Language Part of VLM to ENGINE
     parser.add_argument('--tp_size',
@@ -63,16 +182,16 @@ def parse_arguments():
 
     parser.add_argument('--pp_size',
                         type=int,
-                        default=1,
+                        default=PP_SIZE,
                         help='N-way pipeline parallelism size')
 
     parser.add_argument('--dtype',
                         type=str,
-                        default='bfloat16',
+                        default=DTYPE,
                         choices=['float32', 'bfloat16', 'float16'])
 
     parser.add_argument('--use_weight_only',
-                        default=False,
+                        default=USE_WEIGHT_ONLY,
                         action="store_true",
                         help='Quantize weights for the various GEMMs to INT4/INT8.'
                         'See --weight_only_precision to set the precision')
@@ -88,7 +207,7 @@ def parse_arguments():
                         const='int8',
                         type=str,
                         nargs='?',
-                        default='int8',
+                        default=WEIGHT_ONLY_PRECISION,
                         choices=['int8', 'int4', 'int4_gptq'],
                         help=
                         'Define the precision for the weights when using weight-only quantization.'
@@ -170,7 +289,7 @@ def parse_arguments():
 
     parser.add_argument('--workers',
                         type=int,
-                        default=1,
+                        default=WORKERS,
                         help='The number of workers for converting checkpoint in parallel')
 
     parser.add_argument('--moe_tp_size',
@@ -187,98 +306,181 @@ def parse_arguments():
 
     parser.add_argument('--gemm_plugin',
                         type=str,
-                        default='auto',
-                        help='To confirm'
+                        default=GEMM_PLUGIN,
+                        choices=['auto', 'float16', 'float32', 'bfloat16', 'int32', 'fp8', 'disable'],
+                        help='The GEMM plugin that utilizes NVIDIA cuBLASLt to perform GEMM operations. Note: it’s only affective for non-quantized gemm operations (except FP8).Note: For FP8, it also requires same calibration in checkpoint.'
     )
 
-    parser.add_argument('--max_batch_size',
+    parser.add_argument('--llm_batch_size',
                         type=int,
-                        default=1,
-                        help='To confirm'
+                        default=LLM_BATCH_SIZE,
+                        help='Maximum number of requests that the engine can schedule.'
     )
 
     parser.add_argument('--max_input_len',
                         type=int,
-                        default=4096,
-                        help='To confirm'
+                        default=MAX_INPUT_LEN,
+                        help='Maximum input length of one request.'
     )
 
     parser.add_argument('--max_seq_len',
                         type=int,
-                        default=4068,
-                        help='To confirm'
+                        default=MAX_SEQ_LEN,
+                        help='Maximum total length of one request, including prompt and outputs.'
     )
 
     parser.add_argument('--max_multimodal_len',
                         type=int,
-                        default=3328,
-                        help='To confirm'
+                        default=MAX_MULTIMODAL_LEN,
+                        help='Maximum multimodal input size for multimodal models.'
+    )
+
+    parser.add_argument('--context_fmha',
+                        type=str,
+                        default=CONTEXT_FMHA,
+                        choices=['enable', 'disable'],
+                        help='Enable the fused multi-head attention during the context phase, will trigger a kernel that performs the MHA/MQA/GQA block using a single kernel.'
+    )
+
+    parser.add_argument('--moe_plugin',
+                        type=str,
+                        default=MOE_PLUGIN,
+                        choices=['auto', 'float16', 'float32', 'bfloat16' , 'int32' , 'disable'],
+                        help='Enable some customized kernels to speed up the MoE layer of MoE models.'
+    )
+
+    parser.add_argument('--paged_kv_cache',
+                        type=str,
+                        default=PAGED_KV_CACHE,
+                        choices=['enable', 'disable'],
+                        help='Enable Paged KV Cache'
+    )
+
+    parser.add_argument('--mamba_conv1d_plugin',
+                        type=str,
+                        default=MAMBA_CONV1D_PLUGIN,
+                        choices=['auto', 'float16', 'float32', 'bfloat16', 'int32', 'disable'],
+                        help='Enable customized kernels to speed up conv1d operator for Mamba.'
+    )
+
+    parser.add_argument('--gpt_attention_plugin',
+                        type=str,
+                        default=GPT_ATTENTION_PLUGIN,
+                        choices=['auto', 'float16', 'float32', 'bfloat16', 'int32', 'disable'],
+                        help='The plugin that uses efficient kernels and enables an in-place update of the KV cache for attention layer of GPT-like decoder models.'
+    )
+
+    parser.add_argument('--remove_input_padding',
+                        type=str,
+                        default=REMOVE_INPUT_PADDING,
+                        choices=['enable', 'disable'],
+                        help='Pack different tokens together, which reduces both the amount of computations and memory consumption.'
     )
 
     return parser.parse_args()
 
 def main(args):
 
+    assert (args.num_frames * args.llm_batch_size) % args.vis_batch_size == 0
+    assert args.max_multimodal_len == 256 * args.num_frames * args.llm_batch_size
+    assert 256 * args.num_frames < args.max_input_len
+    assert args.max_input_len < args.max_seq_len
+
+    print(f'Setting vis_batch_size to {args.vis_batch_size}, which means the vision engine can process {args.vis_batch_size} image at a time')
+    print(f'Setting llm_batch_size to {args.llm_batch_size}, which means you can process {args.llm_batch_size} request in one inference')
+    print(f'Setting num_frames to {args.num_frames}, which means you can have {args.num_frames} for each request in a batch')
+    print(f'Setting max_input_len to {args.max_input_len}, which means you can have {args.max_input_len - 256 * args.num_frames} tokens in prompt and question for each request in a batch.')
+    print(f'Setting max_seq_len to {args.max_seq_len}, which means you can output {args.max_seq_len - args.max_input_len} tokens for each request')
+
+    MODEL_CKPT_PATH = MODEL_CKPT_MAP[args.model_name]
+    precision_suffix = "_bf16"
+    if args.use_weight_only and "int4" in args.weight_only_precision:
+        precision_suffix = "_i4"
+    elif args.use_weight_only and "int8" in args.weight_only_precision:
+        precision_suffix = "_i8"
+
+    MODEL_OUTPUT_PATH = f"models/{args.model_name}{precision_suffix}"
+    os.makedirs(MODEL_OUTPUT_PATH, exist_ok=True)
+    
+    ONNX_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/{args.model_name}_vis.onnx")
+    VIS_ENGINE_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/{args.model_name}_vis_engine")
+    LLM_ENGINE_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/{args.model_name}_llm_engine")
+
+    vis2onnx_build = {'skip': False, 'peak_rss_gb': 0, 'peak_vms_gb': 0, 'elapsed_time': 0}
+    vis2engine_build = {'skip': False, 'peak_rss_gb': 0, 'peak_vms_gb': 0, 'elapsed_time': 0}
+    llm2engine_build = {'skip': False, 'peak_rss_gb': 0, 'peak_vms_gb': 0, 'elapsed_time': 0}
+
     # Convert Vision part of VLM to ONNX
     if os.path.exists(ONNX_PATH) or args.no_vis_onnx:
         print(f'Skipping: Convert Vision part of VLM to ONNX')
+        vis2onnx_build['skip'] = True
     else:
-        start_time = time.time()
         model = AutoModel.from_pretrained(
             MODEL_CKPT_PATH,
-            dtype=torch.float32, # try lower this when export multiple weights file instead of just one onnx
+            dtype=torch.float32,
             low_cpu_mem_usage=True,
             trust_remote_code=True).eval()
-            
+        model.forward = model.extract_feature
+
         MEAN = [[0.485 * 255, 0.456 * 255, 0.406 * 255]]
         STD = [[0.229 * 255, 0.224 * 255, 0.225 * 255]]
 
-        N, C, H, W = [1, 3, 448, 448]
+        N, C, H, W = [args.vis_batch_size, 3, 448, 448]
 
-        pixel_values = torch.randn(N, C, H, W, device=model.device, dtype=torch.float32)
-        model.forward = model.extract_feature
-        model = model.to(torch.float32).eval()
-        torch.onnx.export(
-            model, 
-            pixel_values, 
-            ONNX_PATH,
-            input_names=['input'],
-            output_names=['output']
-        )
+        stop_signal = threading.Event()
+        monitor_thread = threading.Thread(target=monitor_pid_memory, args=(os.getpid(), vis2onnx_build, stop_signal))
+        monitor_thread.start()
 
-        print(f'Export vlm_vision_onnx to {ONNX_PATH} (Elapsed {int(time.time() - start_time)}s)')
+        try:
+            torch.onnx.export(
+                model, 
+                torch.randn(N, C, H, W, device=model.device, dtype=model.dtype),  
+                ONNX_PATH,
+                input_names=['input'],
+                output_names=['output']
+            )
+        finally:
+            stop_signal.set()
+            monitor_thread.join()
 
     # Convert Vision part of VLM to ENGINE
     if os.path.exists(VIS_ENGINE_PATH) or args.no_vis_engine:
         print(f'Skipping: Convert Vision part of VLM to ENGINE')
+        vis2engine_build['skip'] = True
     else:
-        start_time = time.time()
         assert os.path.exists(ONNX_PATH)
         os.makedirs(VIS_ENGINE_PATH, exist_ok=True)
-        subprocess.run([
+
+        proc = subprocess.Popen([
             '/usr/src/tensorrt/bin/trtexec',
             f'--onnx={ONNX_PATH}',
             f'--saveEngine={VIS_ENGINE_PATH}/model.engine',
             '--fp16',
             '--inputIOFormats=fp16:chw',
             '--outputIOFormats=fp16:chw'
-        ])
+        ], text=True)
+
+        monitor_thread = threading.Thread(target=monitor_memory, args=(proc, vis2engine_build))
+        monitor_thread.start()
+
+        stdout, stderr = proc.communicate()
+        monitor_thread.join()
 
         with open(os.path.join(VIS_ENGINE_PATH, "config.json"), 'w') as f:
             json.dump({
                 "builder_config": {
                     "model_type": "internvl",
-                    "precision": "float16"
+                    "precision": "float16",
+                    "vis_batch_size": args.vis_batch_size,
+                    "max_num_frames": args.num_frames
                 }
             }, f, indent=4)
-
-        print(f'Export vlm_vision_engine to {VIS_ENGINE_PATH} (Elapsed {int(time.time() - start_time)}s)')
 
     # Convert Language part of VLM to ENGINE
     if os.path.exists(LLM_ENGINE_PATH) or args.no_llm_engine:
         print(f'Skipping: Convert Language part of VLM to ENGINE')
+        llm2engine_build['skip'] = True
     else:
-        start_time = time.time()
         def args_to_quant_config(args: argparse.Namespace) -> QuantConfig:
             '''return config dict with quantization info based on the command line args
             '''
@@ -316,52 +518,56 @@ def main(args):
             config_file = os.path.join(model_dir, "configuration_internvl_chat.py")
 
             with open(config_file, "r") as f:
-                content = f.read()
+                lines= f.readlines()
 
-            if "def __getattr__" in content:
-                print("✅ File is already patched.")
-            else:
-                patch_code = """
-        def __getattr__(self, name):
-            if name == 'num_experts':
-                return 0
-            if 'llm_config' in self.__dict__:
-                try: return getattr(self.llm_config, name)
-                except AttributeError: pass
-            if 'vision_config' in self.__dict__:
-                try: return getattr(self.vision_config, name)
-                except AttributeError: pass
-            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
-                """
-                pattern = r"(class InternVLChatConfig\(PretrainedConfig\):)"
-                new_content = re.sub(pattern, r"\1" + patch_code, content)
-                with open(config_file, "w") as f:
-                        f.write(new_content)
+            if any("def __getattr__" in line for line in lines):
+                print(f"✅ Already patched: {config_file}")
+                return
+
+            class_idx = -1
+            for i, line in enumerate(lines):
+                if "class InternVLChatConfig" in line:
+                    class_idx = i
+                    break
+            
+            if class_idx == -1:
+                print("❌ Could not find class definition.")
+                raise NotImplementedError
+
+            indent_style = "    "
+            for i in range(class_idx + 1, len(lines)):
+                if lines[i].strip():
+                    match = re.match(r"(\s+)", lines[i])
+                    if match:
+                        indent_style = match.group(1)
+                    break
+
+            raw_patch = textwrap.dedent("""
+                    def __getattr__(self, name):
+                        if name == 'num_experts':
+                            return 0
+                        if 'llm_config' in self.__dict__:
+                            try: return getattr(self.llm_config, name)
+                            except AttributeError: pass
+                        if 'vision_config' in self.__dict__:
+                            try: return getattr(self.vision_config, name)
+                            except AttributeError: pass
+                        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+                """).strip()
+
+            indented_patch = textwrap.indent(raw_patch, indent_style)
+
+            lines.insert(class_idx + 1, f"\n{indented_patch}\n")
+
+            with open(config_file, "w") as f:
+                f.writelines(lines)
                 
-                print(f"✏️ Patched: {config_file}")
-
-        def execute(workers, func, args):
-            if workers == 1:
-                for rank, f in enumerate(func):
-                    f(args, rank)
-            else:
-                with ThreadPoolExecutor(max_workers=workers) as p:
-                    futures = [p.submit(f, args, rank) for rank, f in enumerate(func)]
-                    exceptions = []
-                    for future in as_completed(futures):
-                        try:
-                            future.result()
-                        except Exception as e:
-                            traceback.print_exc()
-                            exceptions.append(e)
-                    assert len(
-                        exceptions
-                    ) == 0, "Checkpoint conversion failed, please check error log."
+            print(f"✏️ Patched: {config_file}")
 
         model_dir = snapshot_download(repo_id=MODEL_CKPT_PATH)
         patch_config_file(model_dir)
 
-        tmp_converted_dir = f'models/{MODEL_NAME}/tmp_converted'
+        tmp_converted_dir = f'{MODEL_OUTPUT_PATH}/tmp_converted'
         os.makedirs(tmp_converted_dir, exist_ok=True)
 
         load_model_on_cpu = args.load_model_on_cpu
@@ -412,12 +618,16 @@ def main(args):
                     quant_config=quant_config,
                     use_hf_gptq_checkpoint=use_hf_gptq_checkpoint,
                     **override_fields)
+                    
                 qwen.save_checkpoint(tmp_converted_dir, save_config=(rank == 0))
                 del qwen
 
-            execute(args.workers, [convert_and_save_rank] * world_size, args)
+            for rank in range(world_size):
+                convert_and_save_rank(args, rank)
+            
             release_gc()
-    
+            gc.collect()
+            
         config_path = f'{tmp_converted_dir}/config.json'
 
         with open(config_path, 'r') as f:
@@ -428,22 +638,41 @@ def main(args):
         with open(config_path, 'w') as f:
             json.dump(config_data, f, indent=4)
 
-        subprocess.run([
+        proc = subprocess.Popen([
             'trtllm-build',
             f'--checkpoint_dir={tmp_converted_dir}',
             f'--output_dir={LLM_ENGINE_PATH}',
             f'--gemm_plugin={args.gemm_plugin}',
-            f'--max_batch_size={args.max_batch_size}',
+            f'--max_batch_size={args.llm_batch_size}',
             f'--max_input_len={args.max_input_len}',
             f'--max_seq_len={args.max_seq_len}',
-            f'--max_multimodal_len={args.max_multimodal_len}'
-        ])
+            f'--max_multimodal_len={args.max_multimodal_len}',
+            f'--workers={args.workers}',
+            f'--paged_kv_cache={args.paged_kv_cache}',
+            f'--remove_input_padding={args.remove_input_padding}',
+            f'--gpt_attention_plugin={args.gpt_attention_plugin}', 
+            f'--context_fmha={args.context_fmha}',
+            f'--moe_plugin={args.moe_plugin}',
+            f'--mamba_conv1d_plugin={args.mamba_conv1d_plugin}',
+        ], text=True)
+
+        monitor_thread = threading.Thread(target=monitor_memory, args=(proc, llm2engine_build))
+        monitor_thread.start()
+
+        stdout, stderr = proc.communicate()
+        monitor_thread.join()
+
+        if proc.returncode == 0:
+            print(f"Build Successful!")
+        else:
+            print(f"Build FAILED with exit code {proc.returncode}")
+            print(f"Error: {stderr}")
 
         shutil.rmtree(tmp_converted_dir)
         if os.path.exists('model.cache'):
             os.remove('model.cache')
 
-        print(f'Export vlm_language_engine to {LLM_ENGINE_PATH} (Elapsed {int(time.time() - start_time)}s)')
+    overview(vis2onnx_build, vis2engine_build, llm2engine_build)
 
 if __name__ == '__main__':
     args = parse_arguments()
