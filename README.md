@@ -219,7 +219,7 @@ LLM to Engine (trtllm-build)   | DONE       | 235s     | 2.15 GB | 17.70 GB
 | TensorRT | InternVL3-1B |      4     |    6   | INT8  |    0.79     |  259  |    1804    |      2.8     |
 | TensorRT | InternVL3-1B |      8     |    6   | INT8  |    1.58     |  447  |    3368    |      3.4     |
 | TensorRT | InternVL3-1B |     12     |    6   | INT8  |    2.38     |  573  |    5342    |      3.6     |
-| TensorRT | InternVL3-1B |     20     |    6   | INT8  |    3.95     |  720  |    8540    |      5.1     |
+| TensorRT | InternVL3-1B |     20     |    6   | INT8  |    3.95     |  672  |    8540    |      5.1     |
 | TensorRT | InternVL3-1B |     24     |    6   | INT8  |    4.69     |  702  |   10279    |      5.5     |
 | TensorRT | InternVL3-1B |      2     |    6   | INT4  |    0.39     |  189  |    1000    |      2.5     |
 | TensorRT | InternVL3-1B |      4     |    6   | INT4  |    0.81     |  263  |    1854    |      2.7     |
