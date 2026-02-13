@@ -29,8 +29,8 @@ MODEL_CKPT_MAP = {
 }
 
 assert (MODEL_NAME := 'InternVL3-1B') in list(MODEL_CKPT_MAP.keys())
-NUM_FRAMES = 1
-LLM_BATCH_SIZE = 1
+NUM_FRAMES = 6
+LLM_BATCH_SIZE = 24
 VIS_BATCH_SIZE = NUM_FRAMES # if small enough, can do i in one run, NUM_FRAMES * LLM_BATCH_SIZE
 MAX_MULTIMODAL_LEN = 256 * NUM_FRAMES * LLM_BATCH_SIZE # total image len (sum of whole batch)
 MAX_INPUT_LEN = 256 * NUM_FRAMES + 100 # input text length (for each batch)
@@ -38,11 +38,11 @@ MAX_SEQ_LEN = MAX_INPUT_LEN + 500 # output text length (for each batch)
 
 PP_SIZE = 1
 WORKERS = 1
-USE_WEIGHT_ONLY = False
-assert (WEIGHT_ONLY_PRECISION := 'int8') in ['int8', 'int4', 'int4_gptq']
+USE_WEIGHT_ONLY = True
+assert (WEIGHT_ONLY_PRECISION := 'int4') in ['int8', 'int4', 'int4_gptq']
 assert (GEMM_PLUGIN := 'disable') in ['auto', 'float16', 'float32', 'bfloat16', 'int32', 'fp8', 'disable']
 assert (DTYPE := 'bfloat16') in ['float32', 'bfloat16', 'float16']
-assert (CONTEXT_FMHA := 'enable') in ['enable', 'disable'] # enabling it can speed up? and dont take memory, weird
+assert (CONTEXT_FMHA := 'enable') in ['enable', 'disable'] # optimized flash attention on orin nano
 assert (MOE_PLUGIN := 'disable') in ['auto', 'float16', 'float32', 'bfloat16' , 'int32' , 'disable']
 assert (PAGED_KV_CACHE := 'enable') in ['enable', 'disable']
 assert (MAMBA_CONV1D_PLUGIN := 'disable') in ['auto', 'float16', 'float32', 'bfloat16', 'int32', 'disable']
@@ -617,6 +617,7 @@ def main(args):
                     mapping=mapping,
                     quant_config=quant_config,
                     use_hf_gptq_checkpoint=use_hf_gptq_checkpoint,
+                    low_cpu_mem_usage=False,
                     **override_fields)
                     
                 qwen.save_checkpoint(tmp_converted_dir, save_config=(rank == 0))
@@ -659,18 +660,74 @@ def main(args):
         monitor_thread = threading.Thread(target=monitor_memory, args=(proc, llm2engine_build))
         monitor_thread.start()
 
-        stdout, stderr = proc.communicate()
-        monitor_thread.join()
+        # Config for polling and timeouts
+        HARD_TIMEOUT = 600    # 10 minutes
+        CHECK_INTERVAL = 20   # 20 seconds
+        start_time = time.time()
+        early_exit = False
+        last_engine_size = 0
 
-        if proc.returncode == 0:
-            print(f"Build Successful!")
-        else:
-            print(f"Build FAILED with exit code {proc.returncode}")
-            print(f"Error: {stderr}")
+        try:
+            print(f"Monitoring build... (Hard timeout: {HARD_TIMEOUT}s)")
+            
+            while True:
+                if proc.poll() is not None:
+                    break
 
-        shutil.rmtree(tmp_converted_dir)
-        if os.path.exists('model.cache'):
-            os.remove('model.cache')
+                config_path = os.path.join(LLM_ENGINE_PATH, 'config.json')
+                engine_path = os.path.join(LLM_ENGINE_PATH, 'rank0.engine')
+                
+                if os.path.exists(config_path) and os.path.exists(engine_path):
+                    if os.path.getsize(engine_path) == last_engine_size:
+                        print("Detected complete rank0.engine. Terminating builder early...")
+                        proc.terminate()
+                        early_exit = True
+                        break
+                    last_engine_size = os.path.getsize(engine_path)
+
+                # HARD TIMEOUT CHECK
+                if (time.time() - start_time) > HARD_TIMEOUT:
+                    print("Reached 10-minute hard timeout. Killing process.")
+                    proc.kill()
+                    break
+
+                time.sleep(CHECK_INTERVAL)
+
+            stdout, stderr = proc.communicate()
+            monitor_thread.join()
+
+            engine_exists = os.path.exists(os.path.join(LLM_ENGINE_PATH, 'rank0.engine'))
+            
+            if (proc.returncode == 0 or early_exit) and engine_exists:
+                print("Build Successful!")
+            else:
+                print(f"Build FAILED. Return Code: {proc.returncode}")
+                print(f"Error Log: {stderr}")
+        finally:
+            if os.path.exists(tmp_converted_dir):
+                shutil.rmtree(tmp_converted_dir)
+            if os.path.exists('model.cache'):
+                os.remove('model.cache')
+
+
+
+
+
+
+        # try:
+        #     stdout, stderr = proc.communicate()
+        #     monitor_thread.join()
+
+        #     if proc.returncode == 0:
+        #         print(f"Build Successful!")
+        #     else:
+        #         print(f"Build FAILED with exit code {proc.returncode}")
+        #         print(f"Error: {stderr}")
+        # finally:
+
+        #     shutil.rmtree(tmp_converted_dir)
+        #     if os.path.exists('model.cache'):
+        #         os.remove('model.cache')
 
     overview(vis2onnx_build, vis2engine_build, llm2engine_build)
 

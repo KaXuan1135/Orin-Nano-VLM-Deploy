@@ -1,6 +1,25 @@
-# Setup TensorRT-LLM 0.12.0 in Orin Nano (Jetpack 6.2.1)
+# Summary
+```
+This project deploys InternVL3-1B/2B vision-language models on NVIDIA Jetson Orin Nano (8GB) using TensorRT-LLM, establishing the practical operating envelope of edge VLM inference under tight memory constraints.
 
-## Upgrade to Super Version
+Key results:
+- Achieved 5–6× inference speedup over HuggingFace baseline via TensorRT engines
+- Sustained 600+ tokens/sec throughput with batched INT8 inference
+- Identified the device’s memory and batch scaling limits
+- Built a reproducible pipeline for model conversion, benchmarking, and profiling
+
+Key engineering insights:
+- Edge VLM is memory-bound at low batch and compute-bound at high batch
+- KV cache dominates memory usage beyond moderate batch sizes
+- TensorRT-LLM engine builds become unstable under heavy swap pressure
+- INT4 vs INT8 performance depends on saturation regime and bandwidth limits
+
+This repository documents the full deployment workflow, benchmarking methodology, and system-level analysis.
+```
+
+# Setup
+
+## Setup Orin Nano (Jetpack 6.2.1)
 
 Pre-Knowledge:
 
@@ -27,7 +46,8 @@ Pre-Knowledge:
 7. On right top of the jetson's windows, set power options to maxn super
 8. In CMD, run 'sudo jetson_clocks' to boost manually, and use Jtop to check performance, the cpu freq should be 1.7ghz and gpu should be 1.0ghz.
 
-## Setup TensorRT-LLM (https://github.com/NVIDIA/TensorRT-LLM/blob/v0.12.0-jetson/README4Jetson.md)
+
+## Setup TensorRT-LLM 0.12.0 (https://github.com/NVIDIA/TensorRT-LLM/blob/v0.12.0-jetson/README4Jetson.md)
 
 ```bash
 sudo apt-get update
@@ -70,24 +90,151 @@ echo 'export PATH=$HOME/.local/bin:$PATH' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-# Converting InternVL3-1B/2B to .engine
+# Conversion
+```
+python pt2engine.py \
+--model_name InternVL3-2B \
+--num_frames 1 \
+--llm_batch_size 1 \
+--vis_batch_size 1 \
+--max_multimodal_len 256 \
+--max_input_len 356 \
+--max_seq_len 856 \
+--use_weight_only \
+--weight_only_precision int4
+```
 
-for 1B, convert success with 40GB of memory (incl. swap)
-for 2B, convert success with 50GB of memory and with int4 (incl. swap)
-* On success converted case, the printed memory will be significantly low (ex. 2B peak vram only 20GB), but if you dont have enough memory, the building process will get killed and print large vram required (2B peak vram is 44GB). 
-
-# Inference with InternVL3-1B/2B
-
+# Inference
+```
 python engine_infer.py \
-    --max_new_tokens 50 \
-    --input_text "Where is the country of the image?How can you tell?" \
-    --hf_model_name OpenGVLab/InternVL3-1B \
-    --visual_engine_dir /home/pi/kx/pt2engine_vlm/models/InternVL3-1B_i4/InternVL3-1B_vis_engine \
-    --llm_engine_dir /home/pi/kx/pt2engine_vlm/models/InternVL3-1B_i4/InternVL3-1B_llm_engine
+--hf_model_name OpenGVLab/InternVL3-2B \
+--visual_engine_dir /home/pi/kx/pt2engine_vlm/models/InternVL3-2B_i8/InternVL3-2B_vis_engine \
+--llm_engine_dir /home/pi/kx/pt2engine_vlm/models/InternVL3-2B_i8/InternVL3-2B_llm_engine
+```
 
-python engine_infer.py \
-    --max_new_tokens 50 \
-    --input_text "Where is the country of the image?How can you tell?" \
-    --hf_model_name OpenGVLab/InternVL3-2B \
-    --visual_engine_dir /home/pi/kx/pt2engine_vlm/models/InternVL3-2B_i4/InternVL3-2B_vis_engine \
-    --llm_engine_dir /home/pi/kx/pt2engine_vlm/models/InternVL3-2B_i4/InternVL3-2B_llm_engine
+# Benchmark
+- The Jetson Orin Nano is upgrade to Jetpack 6.2.1 Super
+  - 8GB Ram, with a 40GB Swap Size
+- RK3588 32GB
+
+## Conversion Benchmark
+- num_frames = 1
+- llm_batch_size = 1
+- vis_batch_size = 1
+- max_multimodal_len = 256
+- max_input_len = 256 + 100
+- max_seq_len = 256 + 100 + 500
+
+### InternVL3-1B, No Quantized (bf16)
+```
+==================================================
+       CONVERSION PROCESS SUMMARY OVERVIEW
+==================================================
+Stage                          | Status     | Time     | Peak RSS | Peak VMS
+----------------------------------------------------------------------
+Vision to ONNX                 | DONE       | 89s      | 6.60 GB | 22.01 GB
+Vision to Engine (trtexec)     | DONE       | 169s     | 5.07 GB | 12.98 GB
+LLM to Engine (trtllm-build)   | DONE       | 183s     | 3.27 GB | 18.48 GB
+======================================================================
+```
+
+### InternVL3-1B, Quantized (int8)
+```
+==================================================
+       CONVERSION PROCESS SUMMARY OVERVIEW
+==================================================
+Stage                          | Status     | Time     | Peak RSS | Peak VMS
+----------------------------------------------------------------------
+Vision to ONNX                 | DONE       | 80s      | 6.53 GB | 21.75 GB
+Vision to Engine (trtexec)     | DONE       | 175s     | 5.09 GB | 12.98 GB
+LLM to Engine (trtllm-build)   | DONE       | 67s      | 2.69 GB | 16.37 GB
+======================================================================
+```
+
+### InternVL3-1B, Quantized (int4)
+```
+==================================================
+       CONVERSION PROCESS SUMMARY OVERVIEW
+==================================================
+Stage                          | Status     | Time     | Peak RSS | Peak VMS
+----------------------------------------------------------------------
+Vision to ONNX                 | DONE       | 57s      | 6.60 GB | 22.01 GB
+Vision to Engine (trtexec)     | DONE       | 193s     | 5.15 GB | 13.25 GB
+LLM to Engine (trtllm-build)   | DONE       | 98s      | 2.47 GB | 16.04 GB
+======================================================================
+```
+### InternVL-2B, Quantized (int8)
+```
+The conversion of InternVL3-2B-INT8 to a TensorRT engine on the Orin Nano (8GB) is inconsistent. 
+Even with a 50GB swap file, the process may crash or produce a "partially complete" yet functional .engine file.
+
+Observed Stability Pattern:
+- Rebooting the system.
+- Warm-up Effect: Successfully converting a smaller/working model (e.g., InternVL3-1B) immediately before the 2B model significantly increases the 2B model's success rate.
+```
+
+### InternVL-2B, Quantized (int4)
+```
+==================================================
+       CONVERSION PROCESS SUMMARY OVERVIEW
+==================================================
+Stage                          | Status     | Time     | Peak RSS | Peak VMS
+----------------------------------------------------------------------
+Vision to ONNX                 | DONE       | 99s      | 5.96 GB | 26.50 GB
+Vision to Engine (trtexec)     | DONE       | 178s     | 5.05 GB | 13.03 GB
+LLM to Engine (trtllm-build)   | DONE       | 235s     | 2.15 GB | 17.70 GB
+======================================================================
+```
+
+## Inference Tokens per second & Memory Usage
+- Batch Size: 1 (Single sequence processing)
+- Input: 1 Image (Frame) + Prompt: "Describe this image in detail."
+
+|   Platform  |  Device    |    Model     |  Dtype |  TPS (Super) | Out Tokens | Memory (GB) | 
+|     :---    |   :---     |    :---      |  :---: |     :---:    |   :---:    |    :---:    | 
+| HuggingFace |  Orin Nano | InternVL3-1B |  BF16  |  8.62(11.94) |    115     |     2.2     |
+| HuggingFace |  Orin Nano | InternVL3-2B |  BF16  |  6.75(9.68)  |     89     |     4.3     |
+|   TensorRT  |  Orin Nano | InternVL3-1B |  BF16  | 38.19(43.53) |     76     |     2.9     |
+|   TensorRT  |  Orin Nano | InternVL3-1B |  INT8  | 46.36(53.31) |     67     |     2.3     |
+|   TensorRT  |  Orin Nano | InternVL3-1B |  INT4  | 50.02(58.80) |     58     |     2.1     |
+|   TensorRT  |  Orin Nano | InternVL3-2B |  INT8  | 35.34(39.93) |     64     |     3.4     |
+|   TensorRT  |  Orin Nano | InternVL3-2B |  INT4  | 44.14(55.26) |     70     |     2.9     |
+
+|   Platform  |  Device    |    Model     |  Dtype |   TPS  | Out Tokens | Memory (GB) | 
+|     :---    |   :---     |    :---      |  :---: |  :---: |   :---:    |    :---:    | 
+|     RKNN    |   RK3588   | InternVL3-1B |  INT8  |  11.79 |     56     |     1.6     |
+|     RKNN    |   RK3588   | InternVL3-2B |  INT8  |   7.36 |     43     |     2.6     | 
+
+* TPS: Tokens per second
+* Dtype: Data Precision of the model, the higher the precision, the better the model, but lower the speed.
+* Values in parentheses (XX.XX) represent performance in Super Mode (MAXN)
+
+## Maximizing Throughput by Batch Inference
+- Batch Size: N
+- Input: 6 Image (Frame) + Prompt: "Describe the images in detail."
+
+| Platform |     Model    | Batch Size | Frames | Dtype |  TTFT (sec) |  TPS  | Out Tokens |  Memory (GB) |
+|   :---   |     :---     |    :---:   |  :---: | :---: |    :---:    | :---: |    :---:   |     :---:    |
+| TensorRT | InternVL3-1B |      2     |    6   | INT8  |    0.40     |  149  |     807    |      2.5     |
+| TensorRT | InternVL3-1B |      4     |    6   | INT8  |    0.79     |  259  |    1804    |      2.8     |
+| TensorRT | InternVL3-1B |      8     |    6   | INT8  |    1.58     |  447  |    3368    |      3.4     |
+| TensorRT | InternVL3-1B |     12     |    6   | INT8  |    2.38     |  573  |    5342    |      3.6     |
+| TensorRT | InternVL3-1B |     20     |    6   | INT8  |    3.95     |  720  |    8540    |      5.1     |
+| TensorRT | InternVL3-1B |     24     |    6   | INT8  |    4.69     |  702  |   10279    |      5.5     |
+| TensorRT | InternVL3-1B |      2     |    6   | INT4  |    0.39     |  189  |    1000    |      2.5     |
+| TensorRT | InternVL3-1B |      4     |    6   | INT4  |    0.81     |  263  |    1854    |      2.7     |
+| TensorRT | InternVL3-1B |      8     |    6   | INT4  |    1.62     |  462  |    3738    |      3.3     |
+| TensorRT | InternVL3-1B |     12     |    6   | INT4  |    2.39     |  586  |    5607    |      3.9     |
+| TensorRT | InternVL3-1B |     24     |    6   | INT4  |    4.70     |  647  |    8640    |      5.4     |
+
+* Int4 faster than Int8 in lower batch size due to Bandwidth Limited. Moving 4-bit weights is much faster.
+* Int4 slower than Int8 in higher batch size due to Compute/Kernel Limited. Int8 kernels are more mature and have less overhead at high saturation.
+* both Int4 and Int8 has no significantly memory used as the KV Cache dominants the memory usage
+
+## Roadblocks
+1. InternVL 3.5 Mismatch: Direct weight migration currently fails. Standard "forced alignment" results in corrupted output. A dedicated conversion script for the 3.5 architecture is necessary to align the layer mapping correctly.
+2. The conversion of InternVL3-2B-INT8 to a TensorRT engine on the Orin Nano (8GB) is inconsistent. Even with a 50GB swap file, the process may crash or produce a "partially complete" yet functional .engine file.
+
+## Further Optimized Path
+1. Quantized using AWQ can further increase the accuracy and precision of model.
+2. Setting KVCache to int8 can further increase the speed or decreese the memory.

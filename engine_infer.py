@@ -11,7 +11,7 @@ from tensorrt_llm.runtime import InternVLRunner
 def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument('--max_new_tokens', type=int, default=500)
-    parser.add_argument('--batch_size', type=int, default=1)
+    parser.add_argument('--batch_size', type=int, default=24)
     parser.add_argument('--log_level', type=str, default='info')
     parser.add_argument('--visual_engine_dir',
                         type=str,
@@ -108,25 +108,37 @@ if __name__ == '__main__':
 
     args.hf_model_dir = snapshot_download(repo_id=args.hf_model_name)
 
-    model = InternVLRunner(args)
-    raw_image = model.load_test_image()
+    system_prompt = '你是由上海人工智能实验室联合商汤科技开发的书生多模态大模型, 英文名叫InternVL, 是一个有用无害的人工智能助手。'
+    image_prefix = 'Image-$N$: '
+    image_postfix = '\n'
+
+    model = InternVLRunner(
+        args,
+        system_prompt,
+        image_prefix,
+        image_postfix
+    )
 
     image_paths = [
         ['/home/pi/kx/sample_images/cat.jpg', 
-        # '/home/pi/kx/sample_images/tiger.jpg',
-        # '/home/pi/kx/sample_images/apple.jpg',
-        # '/home/pi/kx/sample_images/orange.jpg',
-        # '/home/pi/kx/sample_images/airplane.jpg',
-        # '/home/pi/kx/sample_images/car.jpg'
+        '/home/pi/kx/sample_images/tiger.jpg',
+        '/home/pi/kx/sample_images/apple.jpg',
+        '/home/pi/kx/sample_images/orange.jpg',
+        '/home/pi/kx/sample_images/airplane.jpg',
+        '/home/pi/kx/sample_images/car.jpg'
         ],
-
+        ['/home/pi/kx/sample_images/dog.jpg', 
+        '/home/pi/kx/sample_images/wolf.jpg',
+        '/home/pi/kx/sample_images/apple.jpg',
+        '/home/pi/kx/sample_images/orange.jpg',
+        '/home/pi/kx/sample_images/airplane.jpg',
+        '/home/pi/kx/sample_images/car.jpg'
+        ],
     ]
 
     args.input_text = [
         'Describe the images.',
-        # 'Please describe the images.',
-        # 'Can you please describe the images?',
-        # 'Hi, can you describe the images for me?',
+        'Please describe the images.',
     ]
 
     num_iters = args.profiling_iterations if args.run_profiling else 1
