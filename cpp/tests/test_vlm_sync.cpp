@@ -121,7 +121,6 @@ int main(int argc, char** argv) {
         frames,
         gen_config
     );
-
     trt_multimodal::GenerateResult gen_result_1 = runner->generate_from_features(
         vis_feats,
         inputText,

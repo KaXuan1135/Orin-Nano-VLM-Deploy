@@ -3,6 +3,7 @@
 #include <vector>
 #include <memory>
 #include <numeric>
+#include <opencv2/opencv.hpp>
 
 namespace trt_multimodal {
 
@@ -140,5 +141,54 @@ struct GenerateResult {
     }
 
 };
+
+//Asynchronous
+enum class TaskType { FULL_GEN, VISION_ONLY, GEN_FROM_FEATURES };
+
+struct VisFeaturesTask {
+    uint64_t request_id;
+    std::vector<cv::Mat> images;
+    std::string prompt;
+    GenerateConfig config;
+    // 回调函数，当有一个 Token 产生或整段结束时触发
+    std::function<void(std::string, bool)> callback; 
+};
+
+struct GenerateTask {
+    uint64_t request_id;
+    std::vector<cv::Mat> images;
+    std::string prompt;
+    GenerateConfig config;
+    // 回调函数，当有一个 Token 产生或整段结束时触发
+    std::function<void(std::string, bool)> callback; 
+};
+
+
+struct VisionTask {
+    uint64_t request_id;
+    std::vector<cv::Mat> images;
+    std::function<void(VisualFeatures)> callback; // 返回提取好的特征
+};
+
+struct LLMTask {
+    uint64_t request_id;
+    VisualFeatures features;
+    std::string prompt;
+    std::function<void(std::string, bool)> callback;
+};
+
+struct AsyncInferenceTask {
+    TaskType type;
+    // 数据载体
+    std::vector<cv::Mat> images;
+    std::string user_prompt;
+    GenerateConfig gen_config;
+    VisualFeatures visual_features; // 仅用于 FROM_FEATURES
+    
+    // 回调函数载体
+    std::function<void(GenerateResult)> gen_callback;
+    std::function<void(VisualFeatures)> vis_callback;
+};
+
 
 } // namespace trt_multimodal

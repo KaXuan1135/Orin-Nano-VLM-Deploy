@@ -10,7 +10,7 @@ namespace trt_multimodal {
 class InternVL3Runner : public IMultimodalRunner {
 public:
 
-    // User can only create this class by calling IMultimodalRunner create function
+    // User should only create this class by calling IMultimodalRunner create function
     explicit InternVL3Runner(const ModelConfig& config); 
 
     ~InternVL3Runner() override;

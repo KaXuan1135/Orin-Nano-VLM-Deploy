@@ -90,6 +90,26 @@ echo 'export PATH=$HOME/.local/bin:$PATH' >> ~/.bashrc
 source ~/.bashrc
 ```
 
+## Setup C++ Multimodal Runner
+
+```bash
+cd /path/to/pt2engine_vlm/cpp
+git submodule update --init --recursive
+
+# install rust
+
+mkdir build && cd build
+cmake .. -DTRT_LLM_ROOT=/your/custom/path/TensorRT-LLM
+make -j$(nproc)
+```
+
+## C++ Multimodal Runner Testing
+
+```bash
+./test_vlm_sync
+./test_vlm_async
+```
+
 # Conversion
 ```
 python pt2engine.py \

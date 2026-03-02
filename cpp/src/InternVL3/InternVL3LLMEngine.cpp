@@ -163,7 +163,6 @@ GenerateResult InternVL3LLMEngine::generate_from_features(
     const std::string& user_prompt,
     const GenerateConfig& gen_config
 ) {
-
     //Construct Input Prompts
     std::string pre_prompt = "<|im_start|>system\n" + gen_config.system_prompt + "<|im_end|>\n<|im_start|>user\n";
     std::string post_prompt = "\n" + user_prompt + "<|im_end|>\n<|im_start|>assistant\n";
@@ -204,7 +203,7 @@ GenerateResult InternVL3LLMEngine::generate_from_features(
     
     std::vector<int32_t> post_prompt_tokens = tokenizer->Encode(post_prompt);
     for (auto tid : post_prompt_tokens) input_ids.push_back(static_cast<int32_t>(tid));
-
+    
     tle::Request request = create_request_from_dict(
         input_ids,
         vis_features,

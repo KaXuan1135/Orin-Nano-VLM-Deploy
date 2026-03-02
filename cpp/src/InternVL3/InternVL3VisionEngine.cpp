@@ -5,6 +5,7 @@
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 
+#include "TrtMultimodalRunner/InternVL3/vision_utils.h"
 #include "TrtMultimodalRunner/InternVL3/InternVL3VisionEngine.hpp"
 
 using namespace nvinfer1;
@@ -90,10 +91,8 @@ namespace trt_multimodal {
         int orig_height = image.rows;
         float aspect_ratio = (float)orig_width / orig_height;
 
-        // 1. 寻找最佳比例
         AspectRatio target_aspect_ratio = find_closest_aspect_ratio(aspect_ratio, min_num, max_num, image_size);
 
-        // 2. 计算目标尺寸并缩放
         int target_width = image_size * target_aspect_ratio.width;
         int target_height = image_size * target_aspect_ratio.height;
         int blocks = target_aspect_ratio.width * target_aspect_ratio.height;
@@ -101,7 +100,6 @@ namespace trt_multimodal {
         cv::Mat resized_img;
         cv::resize(image, resized_img, cv::Size(target_width, target_height), 0, 0, cv::INTER_CUBIC);
 
-        // 3. 切分图像 (Crop boxes)
         std::vector<cv::Mat> processed_images;
         for (int i = 0; i < blocks; ++i) {
             int x = (i % target_aspect_ratio.width) * image_size;
@@ -111,7 +109,6 @@ namespace trt_multimodal {
             processed_images.push_back(resized_img(box).clone());
         }
 
-        // 4. Thumbnail 逻辑
         if (use_thumbnail && processed_images.size() != 1) {
             cv::Mat thumbnail;
             cv::resize(image, thumbnail, cv::Size(image_size, image_size), 0, 0, cv::INTER_CUBIC);
@@ -119,7 +116,6 @@ namespace trt_multimodal {
         }
         return processed_images;
     }
-
 
     VisualFeatures InternVL3VisionEngine::extract_visual_features(
         const std::vector<cv::Mat>& images,
@@ -149,7 +145,6 @@ namespace trt_multimodal {
 
         // 目前假定可以一批次解决所有图片，即 m_config.max_vis_batch == 传进来的图片数量
         // for (size_t spilt = 0; spilt < vis_feats.total_patches() / m_config.max_vis_batch; ++spilt) {
-        cudaStreamSynchronize(m_stream); //Neccessary?
 
         vis_engine->context->setInputShape(
             "input", 
@@ -161,39 +156,26 @@ namespace trt_multimodal {
             }
         );
 
-        void *d_input_current = nullptr, *d_output_current = nullptr;
+        void *d_input = nullptr, *d_output_fp16 = nullptr, *d_output_bf16 = nullptr;
         size_t out_elements = m_config.max_vis_batch * m_config.patch_token_size * m_config.embedding_dim;
 
-        cudaMalloc(&d_input_current, m_config.max_vis_batch * 3 * gen_config.patch_size * gen_config.patch_size * sizeof(__half));
-        cudaMalloc(&d_output_current, out_elements * sizeof(uint16_t));
+        cudaMalloc(&d_input, m_config.max_vis_batch * 3 * gen_config.patch_size * gen_config.patch_size * sizeof(__half));
+        cudaMalloc(&d_output_fp16, out_elements * sizeof(uint16_t));
+        cudaMalloc(&d_output_bf16, out_elements * sizeof(uint16_t));
 
         std::vector<__half> host_input_half;
         for (float f : patches_overall) host_input_half.push_back(__float2half(f));
-        cudaMemcpy(d_input_current, host_input_half.data(), host_input_half.size() * sizeof(__half), cudaMemcpyHostToDevice);
+        cudaMemcpy(d_input, host_input_half.data(), host_input_half.size() * sizeof(__half), cudaMemcpyHostToDevice);
 
-        vis_engine->context->setTensorAddress("input", d_input_current);
-        vis_engine->context->setTensorAddress("output", d_output_current);
+        vis_engine->context->setTensorAddress("input", d_input);
+        vis_engine->context->setTensorAddress("output", d_output_fp16);
         vis_engine->context->enqueueV3(m_stream);
         
         cudaStreamSynchronize(m_stream); //Neccessary?
-
-        // 暂时在 CPU 处理精度转换 (FP16 -> BF16)
-        std::vector<uint16_t> host_fp16(out_elements);
-        std::vector<uint16_t> host_bf16(out_elements);
-        cudaMemcpy(host_fp16.data(), d_output_current, out_elements * sizeof(uint16_t), cudaMemcpyDeviceToHost);
-
-        for (size_t i = 0; i < out_elements; ++i) {
-            __half h = *reinterpret_cast<__half*>(&host_fp16[i]);
-            float f = __half2float(h);
-            __nv_bfloat16 bf = __float2bfloat16(f);
-            host_bf16[i] = *reinterpret_cast<uint16_t*>(&bf);
-        }
-
-        void* d_output_bf16 = nullptr;
-        cudaMalloc(&d_output_bf16, out_elements * sizeof(uint16_t));
-        cudaMemcpy(d_output_bf16, host_bf16.data(), out_elements * sizeof(uint16_t), cudaMemcpyHostToDevice);
+        launch_fp16_to_bf16(d_output_fp16, d_output_bf16, out_elements, m_stream);
         embedding_ptr.push_back(d_output_bf16);
-        // }
+        
+        // } for loops end here
 
         vis_feats.embeddings_ptr = std::shared_ptr<void>(embedding_ptr[0], [](void*){});
         vis_feats.dtype = DataType::BF16;
