@@ -29,8 +29,8 @@ MODEL_CKPT_MAP = {
 }
 
 assert (MODEL_NAME := 'InternVL3-1B') in list(MODEL_CKPT_MAP.keys())
-NUM_FRAMES = 6
-LLM_BATCH_SIZE = 24
+NUM_FRAMES = 2
+LLM_BATCH_SIZE = 2
 VIS_BATCH_SIZE = NUM_FRAMES # if small enough, can do i in one run, NUM_FRAMES * LLM_BATCH_SIZE
 MAX_MULTIMODAL_LEN = 256 * NUM_FRAMES * LLM_BATCH_SIZE # total image len (sum of whole batch)
 MAX_INPUT_LEN = 256 * NUM_FRAMES + 100 # input text length (for each batch)
@@ -39,15 +39,15 @@ MAX_SEQ_LEN = MAX_INPUT_LEN + 500 # output text length (for each batch)
 PP_SIZE = 1
 WORKERS = 1
 USE_WEIGHT_ONLY = True
-assert (WEIGHT_ONLY_PRECISION := 'int4') in ['int8', 'int4', 'int4_gptq']
-assert (GEMM_PLUGIN := 'disable') in ['auto', 'float16', 'float32', 'bfloat16', 'int32', 'fp8', 'disable']
+assert (WEIGHT_ONLY_PRECISION := 'int8') in ['int8', 'int4', 'int4_gptq']
+assert (GEMM_PLUGIN := 'auto') in ['auto', 'float16', 'float32', 'bfloat16', 'int32', 'fp8', 'disable']
 assert (DTYPE := 'bfloat16') in ['float32', 'bfloat16', 'float16']
 assert (CONTEXT_FMHA := 'enable') in ['enable', 'disable'] # optimized flash attention on orin nano
 assert (MOE_PLUGIN := 'disable') in ['auto', 'float16', 'float32', 'bfloat16' , 'int32' , 'disable']
 assert (PAGED_KV_CACHE := 'enable') in ['enable', 'disable']
 assert (MAMBA_CONV1D_PLUGIN := 'disable') in ['auto', 'float16', 'float32', 'bfloat16', 'int32', 'disable']
 assert (GPT_ATTENTION_PLUGIN := 'auto') in ['auto', 'float16', 'float32', 'bfloat16', 'int32', 'disable']
-assert (REMOVE_INPUT_PADDING := 'disable') in ['enable', 'disable'] # reduddant in batch size == 1 scenario
+assert (REMOVE_INPUT_PADDING := 'enable') in ['enable', 'disable'] # reduddant in batch size == 1 scenario
 
 def monitor_memory(proc, results):
     """Monitors the memory usage of a process and all its children."""

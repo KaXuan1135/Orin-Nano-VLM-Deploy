@@ -1,0 +1,205 @@
+#include <memory>
+#include <fstream>
+#include <opencv2/opencv.hpp>
+#include <cuda_runtime.h>
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
+
+#include "TrtMultimodalRunner/InternVL3/InternVL3VisionEngine.hpp"
+
+using namespace nvinfer1;
+
+namespace trt_multimodal {
+
+    std::vector<float> transform_to_fp32_chw(const cv::Mat& patch) {
+        cv::Mat float_img;
+        patch.convertTo(float_img, CV_32FC3, 1.0 / 255.0); // ToTensor (0-1)
+
+        // Normalize (ImageNet)
+        cv::Scalar mean(0.485, 0.456, 0.406);
+        cv::Scalar std(0.229, 0.224, 0.225);
+        cv::subtract(float_img, mean, float_img);
+        cv::divide(float_img, std, float_img);
+
+        // HWC -> CHW (3, 448, 448)
+        int area = patch.rows * patch.cols;
+        std::vector<float> output(area * 3);
+        std::vector<cv::Mat> channels(3);
+        cv::split(float_img, channels);
+
+        for (int i = 0; i < 3; ++i) {
+            std::memcpy(output.data() + i * area, channels[i].data, area * sizeof(float));
+        }
+        return output;
+    }
+
+    int InternVL3VisionEngine::init(
+        const ModelConfig& config,
+        const cudaStream_t& stream
+    ) {
+
+        m_config = config;
+        m_stream = stream;
+
+        std::ifstream file(config.vis_engine_path, std::ios::binary);
+        if (!file) throw std::runtime_error("Engine file not found: " +  config.vis_engine_path);
+
+        file.seekg(0, std::ios::end);
+        size_t size = file.tellg();
+        file.seekg(0, std::ios::beg);
+        std::vector<char> buffer(size);
+        file.read(buffer.data(), size);
+
+        vis_engine = std::make_unique<VisionSession>();
+        vis_engine->runtime = nvinfer1::createInferRuntime(gLogger);
+        vis_engine->engine = vis_engine->runtime->deserializeCudaEngine(buffer.data(), buffer.size());
+        vis_engine->context = vis_engine->engine->createExecutionContext();
+
+        return 0;
+    }
+
+    AspectRatio InternVL3VisionEngine::find_closest_aspect_ratio(float aspect_ratio, int min_num, int max_num, int image_size) {
+        float best_ratio_diff = std::numeric_limits<float>::infinity();
+        AspectRatio best_ratio = {1, 1};
+
+        // 预计算所有可能的 target_ratios (1*1, 1*2, 2*1 等)
+        for (int n = min_num; n <= max_num; ++n) {
+            for (int i = 1; i <= n; ++i) {
+                for (int j = 1; j <= n; ++j) {
+                    if (i * j <= max_num && i * j >= min_num) {
+                        float target_aspect_ratio = (float)i / j;
+                        float ratio_diff = std::abs(aspect_ratio - target_aspect_ratio);
+                        if (ratio_diff < best_ratio_diff) {
+                            best_ratio_diff = ratio_diff;
+                            best_ratio = {i, j};
+                        } else if (ratio_diff == best_ratio_diff) {
+                            // 逻辑：如果比例相同，优先选择面积覆盖大的（对应 Python 代码逻辑）
+                            if (i * j > best_ratio.width * best_ratio.height) {
+                                best_ratio = {i, j};
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return best_ratio;
+    }
+
+    std::vector<cv::Mat> InternVL3VisionEngine::dynamic_preprocess(const cv::Mat& image, int min_num, int max_num, int image_size, bool use_thumbnail) {
+        int orig_width = image.cols;
+        int orig_height = image.rows;
+        float aspect_ratio = (float)orig_width / orig_height;
+
+        // 1. 寻找最佳比例
+        AspectRatio target_aspect_ratio = find_closest_aspect_ratio(aspect_ratio, min_num, max_num, image_size);
+
+        // 2. 计算目标尺寸并缩放
+        int target_width = image_size * target_aspect_ratio.width;
+        int target_height = image_size * target_aspect_ratio.height;
+        int blocks = target_aspect_ratio.width * target_aspect_ratio.height;
+
+        cv::Mat resized_img;
+        cv::resize(image, resized_img, cv::Size(target_width, target_height), 0, 0, cv::INTER_CUBIC);
+
+        // 3. 切分图像 (Crop boxes)
+        std::vector<cv::Mat> processed_images;
+        for (int i = 0; i < blocks; ++i) {
+            int x = (i % target_aspect_ratio.width) * image_size;
+            int y = (i / target_aspect_ratio.width) * image_size;
+            
+            cv::Rect box(x, y, image_size, image_size);
+            processed_images.push_back(resized_img(box).clone());
+        }
+
+        // 4. Thumbnail 逻辑
+        if (use_thumbnail && processed_images.size() != 1) {
+            cv::Mat thumbnail;
+            cv::resize(image, thumbnail, cv::Size(image_size, image_size), 0, 0, cv::INTER_CUBIC);
+            processed_images.push_back(thumbnail);
+        }
+        return processed_images;
+    }
+
+
+    VisualFeatures InternVL3VisionEngine::extract_visual_features(
+        const std::vector<cv::Mat>& images,
+        const GenerateConfig& gen_config
+    ) {
+
+        VisualFeatures vis_feats = VisualFeatures();
+        std::vector<float> patches_overall;
+        for (const cv::Mat& image : images) {
+            std::vector<cv::Mat> patches = dynamic_preprocess(
+                image, 
+                gen_config.min_patch,
+                gen_config.max_patch,
+                gen_config.patch_size,
+                gen_config.use_thumbnail
+            );
+
+            for (const cv::Mat& patch : patches) {
+                std::vector<float> flat_data = transform_to_fp32_chw(patch);
+                patches_overall.insert(patches_overall.end(), flat_data.begin(), flat_data.end());
+            }
+
+            vis_feats.image_patch_counts.push_back(patches.size());
+        }
+
+        std::vector<void*> embedding_ptr;
+
+        // 目前假定可以一批次解决所有图片，即 m_config.max_vis_batch == 传进来的图片数量
+        // for (size_t spilt = 0; spilt < vis_feats.total_patches() / m_config.max_vis_batch; ++spilt) {
+        cudaStreamSynchronize(m_stream); //Neccessary?
+
+        vis_engine->context->setInputShape(
+            "input", 
+            nvinfer1::Dims4{
+                m_config.max_vis_batch, 
+                3, 
+                gen_config.patch_size, 
+                gen_config.patch_size
+            }
+        );
+
+        void *d_input_current = nullptr, *d_output_current = nullptr;
+        size_t out_elements = m_config.max_vis_batch * m_config.patch_token_size * m_config.embedding_dim;
+
+        cudaMalloc(&d_input_current, m_config.max_vis_batch * 3 * gen_config.patch_size * gen_config.patch_size * sizeof(__half));
+        cudaMalloc(&d_output_current, out_elements * sizeof(uint16_t));
+
+        std::vector<__half> host_input_half;
+        for (float f : patches_overall) host_input_half.push_back(__float2half(f));
+        cudaMemcpy(d_input_current, host_input_half.data(), host_input_half.size() * sizeof(__half), cudaMemcpyHostToDevice);
+
+        vis_engine->context->setTensorAddress("input", d_input_current);
+        vis_engine->context->setTensorAddress("output", d_output_current);
+        vis_engine->context->enqueueV3(m_stream);
+        
+        cudaStreamSynchronize(m_stream); //Neccessary?
+
+        // 暂时在 CPU 处理精度转换 (FP16 -> BF16)
+        std::vector<uint16_t> host_fp16(out_elements);
+        std::vector<uint16_t> host_bf16(out_elements);
+        cudaMemcpy(host_fp16.data(), d_output_current, out_elements * sizeof(uint16_t), cudaMemcpyDeviceToHost);
+
+        for (size_t i = 0; i < out_elements; ++i) {
+            __half h = *reinterpret_cast<__half*>(&host_fp16[i]);
+            float f = __half2float(h);
+            __nv_bfloat16 bf = __float2bfloat16(f);
+            host_bf16[i] = *reinterpret_cast<uint16_t*>(&bf);
+        }
+
+        void* d_output_bf16 = nullptr;
+        cudaMalloc(&d_output_bf16, out_elements * sizeof(uint16_t));
+        cudaMemcpy(d_output_bf16, host_bf16.data(), out_elements * sizeof(uint16_t), cudaMemcpyHostToDevice);
+        embedding_ptr.push_back(d_output_bf16);
+        // }
+
+        vis_feats.embeddings_ptr = std::shared_ptr<void>(embedding_ptr[0], [](void*){});
+        vis_feats.dtype = DataType::BF16;
+
+        return vis_feats;
+
+    }
+
+} // namespace trt_multimodal
