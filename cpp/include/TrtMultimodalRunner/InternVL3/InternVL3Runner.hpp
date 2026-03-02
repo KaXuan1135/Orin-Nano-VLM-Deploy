@@ -1,6 +1,9 @@
 #pragma once
-#include "TrtMultimodalRunner/IMultimodalRunner.hpp"
+
 #include "TrtMultimodalRunner/Types.hpp" 
+#include "TrtMultimodalRunner/IMultimodalRunner.hpp"
+#include "TrtMultimodalRunner/InternVL3/InternVL3LLMEngine.hpp"
+#include "TrtMultimodalRunner/InternVL3/InternVL3VisionEngine.hpp"
 
 namespace trt_multimodal {
 
@@ -31,8 +34,11 @@ public:
 
 private:
 
-    class Impl; 
-    std::unique_ptr<Impl> pimpl;
+    InternVL3VisionEngine vis_engine;
+    InternVL3LLMEngine llm_engine;
+
+    ModelConfig m_config;
+    cudaStream_t m_stream;
 
 };
 

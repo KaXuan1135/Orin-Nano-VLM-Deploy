@@ -122,13 +122,37 @@ int main(int argc, char** argv) {
         gen_config
     );
 
-    trt_multimodal::GenerateResult gen_result = runner->generate_from_features(
+    trt_multimodal::GenerateResult gen_result_1 = runner->generate_from_features(
         vis_feats,
         inputText,
         gen_config
     );
 
-    print_gen_summary(gen_result);
+    print_gen_summary(gen_result_1);
+
+
+    inputText = "Can you describe the 2 images?";
+    imagePaths = {
+        "/home/pi/kx/sample_images/tiger.jpg",
+        "/home/pi/kx/sample_images/wolf.jpg"
+    };
+
+    frames.clear();
+    for (auto path : imagePaths){
+        cv::Mat img = cv::imread(path);
+        cv::Mat rgbImg;
+        cv::cvtColor(img, rgbImg, cv::COLOR_BGR2RGB);
+
+        frames.push_back(std::move(rgbImg));
+    }
+
+    trt_multimodal::GenerateResult gen_result_2 = runner->generate(
+        frames,
+        inputText,
+        gen_config
+    );
+
+    print_gen_summary(gen_result_2);
 
     return 0;
 }

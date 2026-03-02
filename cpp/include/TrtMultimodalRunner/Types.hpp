@@ -1,10 +1,10 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <memory>
 #include <numeric>
 
 namespace trt_multimodal {
-
 
 namespace ModelType {
     enum class Type {
