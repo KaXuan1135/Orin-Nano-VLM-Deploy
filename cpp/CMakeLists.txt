@@ -3,13 +3,10 @@ project(trtcppinference VERSION 1.0.0 LANGUAGES CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_ARCHITECTURES 87)
 
 set(TRT_LLM_ROOT "/home/pi/kx/TensorRT-LLM" CACHE PATH "Path to TensorRT-LLM root directory")
 message(STATUS "[Internal] Using TRT_LLM_ROOT: ${TRT_LLM_ROOT}")
-
-if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-    set(CMAKE_CUDA_ARCHITECTURES native)
-endif()
 
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
     message(STATUS "[Internal] Setting up Rust/Cargo toolchain for aarch64...")
