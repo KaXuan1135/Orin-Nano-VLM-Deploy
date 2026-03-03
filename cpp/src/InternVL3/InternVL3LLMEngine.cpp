@@ -158,11 +158,148 @@ std::vector<std::string> InternVL3LLMEngine::decode_outputs_cpp(
     return results;
 }
 
-GenerateResult InternVL3LLMEngine::generate_from_features(
+std::vector<std::string> InternVL3LLMEngine::decode_outputs_unflat(
+    // const std::vector<int32_t>& flat_beams_tokens, // 扁平化的 ids
+    const std::vector<std::vector<int32_t>> beams_tokens,
+    size_t input_len
+) {
+    std::vector<std::string> results(m_config.max_beam_width);
+
+    for (int m = 0; m < m_config.max_beam_width; ++m) {
+        const auto& current_beam = beams_tokens[m];
+
+        results[m] = "";
+        if (current_beam.size() > input_len) {
+            std::vector<int32_t> output_ids(
+                current_beam.begin() + input_len, 
+                current_beam.end()
+            );
+            results[m] = strip(tokenizer->Decode(output_ids));
+        }
+    }
+
+    return results;
+}
+
+
+void InternVL3LLMEngine::generate_from_features(
+    const VisualFeatures& vis_features,
+    const std::string& user_prompt,
+    const GenerateConfig& gen_config,
+    GenerateResult& gen_result
+) {
+
+    //Construct Input Prompts
+    std::string pre_prompt = "<|im_start|>system\n" + gen_config.system_prompt + "<|im_end|>\n<|im_start|>user\n";
+    std::string post_prompt = "\n" + user_prompt + "<|im_end|>\n<|im_start|>assistant\n";
+
+    std::vector<std::string> images_prefix(vis_features.total_patches());
+    std::vector<std::string> images_postfix(vis_features.total_patches());
+
+    for (int i = 0; i < vis_features.total_patches(); ++i) {
+        std::string prefix = gen_config.image_prefix;
+        std::string placeholder = "$N$";
+        std::string replacement = std::to_string(i + 1);
+        
+        size_t pos = prefix.find(placeholder);
+        if (pos != std::string::npos) {
+            prefix.replace(pos, placeholder.length(), replacement);
+        }
+        images_prefix.push_back(prefix);
+        images_postfix.push_back(gen_config.image_postfix);
+    }
+
+    //Constuct Input Ids, Replace Image Token with fake tokens
+    std::vector<int32_t> input_ids;
+    size_t cur_fake_id = tokenizer->GetVocabSize();
+
+    std::vector<int32_t> pre_prompt_tokens = tokenizer->Encode(pre_prompt);
+    for (auto tid : pre_prompt_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+
+    for (int i = 0; i < vis_features.image_patch_counts.size(); ++i) {
+        std::vector<int32_t> pre_img_tokens = tokenizer->Encode(images_prefix[i]);
+        for (auto tid : pre_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+
+        for (int j = 0; j < m_config.patch_token_size; ++j) input_ids.push_back(cur_fake_id + j);
+        cur_fake_id += m_config.patch_token_size;
+
+        std::vector<int32_t> post_img_tokens = tokenizer->Encode(images_postfix[i]);
+        for (auto tid : post_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+    }
+    
+    std::vector<int32_t> post_prompt_tokens = tokenizer->Encode(post_prompt);
+    for (auto tid : post_prompt_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+    
+    tle::Request request = create_request_from_dict(
+        input_ids,
+        vis_features,
+        m_config,
+        gen_config,
+        metadata
+    );
+
+    std::vector<std::vector<int>> beams_tokens(m_config.max_beam_width);
+
+    if (gen_config.profiling) {
+        gen_result.start_gen = std::chrono::high_resolution_clock::now();
+        if (gen_config.streaming) {
+            gen_result.start_ttft = std::chrono::high_resolution_clock::now();
+        }
+    }
+
+    std::uint64_t request_id = llm_executor->enqueueRequest(request);
+    gen_result.gen_config = gen_config;
+    gen_result.request_id = request_id;
+    gen_result.system_prompt = gen_config.system_prompt;
+    gen_result.user_prompt = user_prompt;
+    gen_result.input_tokens = input_ids;
+    gen_result.start_gen = std::chrono::high_resolution_clock::now();
+    gen_result.outputs_tokens.resize(m_config.max_beam_width);
+    gen_result.last_outputs_token.resize(m_config.max_beam_width);
+
+    while(!gen_result.done_output) {
+        std::vector<GenerateResult*> ptr_vec = {&gen_result};
+        update_response(ptr_vec, 1000, false);
+        if (gen_result.has_error) throw std::runtime_error("TRT-LLM Error for Request " + std::to_string(gen_result.request_id) + ": " + gen_result.error_msg);
+    }
+
+    if (gen_config.profiling && !gen_config.streaming) {
+
+        std::cout << "User requested profiling, and not streaming, running generate one more time to estimate time to first token" << std::endl;
+
+        GenerateConfig ttft_config = gen_config;
+        ttft_config.max_new_tokens = 1;
+
+        // 这里再跑一次 llm executor，复用之前的 visual encoded embeddings
+        tle::Request ttft_request = create_request_from_dict(
+            input_ids,
+            vis_features,
+            m_config,
+            ttft_config,
+            metadata
+        );
+
+        gen_result.start_ttft = std::chrono::high_resolution_clock::now();
+        std::uint64_t ttft_request_id = llm_executor->enqueueRequest(ttft_request);
+
+        while(!gen_result.first_token_captured) {
+            std::vector<GenerateResult*> ptr_vec = {&gen_result};
+            update_response(ptr_vec, 1000, true);
+            if (gen_result.has_error) throw std::runtime_error("TRT-LLM Error for Request " + std::to_string(gen_result.ttft_request_id) + ": " + gen_result.error_msg);
+        }
+
+    }
+
+}
+
+SharedGenHandle InternVL3LLMEngine::enqueue_generate_from_features(
     const VisualFeatures& vis_features,
     const std::string& user_prompt,
     const GenerateConfig& gen_config
 ) {
+
+    auto handle = SharedGenHandle();
+
     //Construct Input Prompts
     std::string pre_prompt = "<|im_start|>system\n" + gen_config.system_prompt + "<|im_end|>\n<|im_start|>user\n";
     std::string post_prompt = "\n" + user_prompt + "<|im_end|>\n<|im_start|>assistant\n";
@@ -321,21 +458,87 @@ GenerateResult InternVL3LLMEngine::generate_from_features(
     gen_result.system_prompt = gen_config.system_prompt;
     gen_result.user_prompt = user_prompt;
     gen_result.done_output = true;
-    gen_result.input_tokens_len = input_len;
+    // gen_result.input_tokens_len = input_len;
 
-    if (gen_config.profiling) {
-        gen_result.generation_latency_ms = std::chrono::duration<double, std::milli>(end_gen - start_gen).count();
-        gen_result.time_to_first_token_ms = std::chrono::duration<double, std::milli>(end_ttft - start_ttft).count();
-    }
+    // if (gen_config.profiling) {
+    //     gen_result.generation_latency_ms = std::chrono::duration<double, std::milli>(end_gen - start_gen).count();
+    //     gen_result.time_to_first_token_ms = std::chrono::duration<double, std::milli>(end_ttft - start_ttft).count();
+    // }
 
     for (int32_t m = 0; m < m_config.max_beam_width; ++m) {
-        gen_result.outputs_tokens_len.push_back(gen_config.streaming ? beams_tokens[m].size() : beams_tokens[m].size() - input_len);
+        // gen_result.outputs_tokens_len.push_back(gen_config.streaming ? beams_tokens[m].size() : beams_tokens[m].size() - input_len);
         gen_result.full_stops.push_back(beams_tokens[m].back() == metadata.eos_id);
-        gen_result.outputs_text.push_back(batch_decoded[m]);
+        // gen_result.outputs_text.push_back(batch_decoded[m]);
     }
 
-    return gen_result;
+    return handle;
 
 }
+
+void InternVL3LLMEngine::update_response(
+    std::vector<GenerateResult*>& request_results,
+    uint32_t timeout_ms = 1000,
+    bool time_to_first_token_run = false
+) {
+    auto responses = llm_executor->awaitResponses(std::chrono::milliseconds(timeout_ms));
+    for (auto const& resp : responses) {
+        std::uint64_t rid = resp.getRequestId();
+        auto it = std::find_if(request_results.begin(), request_results.end(), 
+            [rid, time_to_first_token_run](const GenerateResult* res) {
+                if (!res) return false;
+                if (time_to_first_token_run) return res->ttft_request_id == rid;
+                else return res->request_id == rid;
+            });
+        if (it == request_results.end()) continue;
+        
+        GenerateResult* res = *it;
+
+        if (resp.hasError()) {
+            res->error_msg = resp.getErrorMsg();
+            res->has_error.store(true);
+        }
+        if ((time_to_first_token_run) || 
+           (res->gen_config.profiling && 
+            res->gen_config.streaming && 
+            !res->first_token_captured)
+        ) {
+            res->first_token_captured.store(true);
+            res->end_ttft = std::chrono::high_resolution_clock::now();
+        }
+        auto const& result = resp.getResult();
+        for (size_t beam_idx = 0; beam_idx < result.outputTokenIds.size(); ++beam_idx) {
+            auto const& tokens = result.outputTokenIds[beam_idx];
+            for (auto tokenId : tokens) {
+                res->outputs_tokens[beam_idx].push_back(static_cast<int>(tokenId));
+            }
+            res->last_outputs_token[beam_idx] = tokens;
+        }
+
+        res->last_outputs_text = decode_outputs_unflat(
+            res->last_outputs_token,
+            res->gen_config.streaming ? 0 : res->input_tokens_len()
+        );
+
+        if (result.isFinal && !time_to_first_token_run) {
+            res->done_output.store(true);
+            res->outputs_text = decode_outputs_unflat(
+                res->outputs_tokens,
+                res->gen_config.streaming ? 0 : res->input_tokens_len()
+            );
+
+            for (size_t m = 0; m < res->outputs_tokens.size(); ++m) {
+                res->full_stops.push_back(res->outputs_tokens[m].back() == metadata.eos_id);
+            }
+
+            if (res->gen_config.profiling) {
+                res->end_gen = std::chrono::high_resolution_clock::now();
+            }
+        }
+
+    }
+}
+
+
+
 
 } // namespace trt_multimodal

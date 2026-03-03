@@ -2,6 +2,7 @@
 #include <mutex>
 #include <atomic>
 #include <thread>
+#include <unordered_map>
 #include <condition_variable>
 
 #include "TrtMultimodalRunner/Types.hpp" 
@@ -20,18 +21,18 @@ public:
 
     ~AsyncInternVL3Runner() override;
 
-    void generate_async(
+    SharedGenHandle enqueue_generate(
         const std::vector<cv::Mat>& images, 
         const std::string& user_prompt,
         const GenerateConfig& gen_config
     ) override;
 
-    void extract_visual_features_async(
+    SharedVisHandle enqueue_extract_visual_features(
         const std::vector<cv::Mat>& images,
         const GenerateConfig& gen_config
     ) override;
 
-    void generate_from_features_async(
+    SharedGenHandle enqueue_generate_from_features(
         const VisualFeatures& visual_features,
         const std::string& user_prompt,
         const GenerateConfig& gen_config
@@ -43,6 +44,9 @@ private:
     std::thread m_worker;
     std::atomic<bool> m_stop;
     std::condition_variable m_cv;
+    std::unordered_map<uint64_t, SharedGenHandle> m_inflight_llm_tasks;
+
+    void generate_listener_loop();
 
 };
 

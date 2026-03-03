@@ -117,12 +117,12 @@ namespace trt_multimodal {
         return processed_images;
     }
 
-    VisualFeatures InternVL3VisionEngine::extract_visual_features(
+    void InternVL3VisionEngine::extract_visual_features(
         const std::vector<cv::Mat>& images,
-        const GenerateConfig& gen_config
+        const GenerateConfig& gen_config,
+        VisualFeatures& vis_feats
     ) {
 
-        VisualFeatures vis_feats = VisualFeatures();
         std::vector<float> patches_overall;
         for (const cv::Mat& image : images) {
             std::vector<cv::Mat> patches = dynamic_preprocess(
@@ -174,14 +174,114 @@ namespace trt_multimodal {
         cudaStreamSynchronize(m_stream); //Neccessary?
         launch_fp16_to_bf16(d_output_fp16, d_output_bf16, out_elements, m_stream);
         embedding_ptr.push_back(d_output_bf16);
-        
+
         // } for loops end here
 
-        vis_feats.embeddings_ptr = std::shared_ptr<void>(embedding_ptr[0], [](void*){});
+        // [Asynchronous Memory Management]
+        // We capture a local copy of m_stream to avoid dependency on 'this' pointer.
+        // This ensures that even if the VisionEngine is destroyed, the shared_ptr's 
+        // custom deleter can safely release the GPU memory via cudaFreeAsync 
+        // without accessing a dangling 'this' pointer.
+        cudaStream_t stream_for_deleter = m_stream;
+        vis_feats.embeddings_ptr = std::shared_ptr<void>(d_output_bf16, [stream_for_deleter](void* ptr) {
+            if (ptr) {
+                cudaFreeAsync(ptr, stream_for_deleter);
+            }
+        });
+
         vis_feats.dtype = DataType::BF16;
 
-        return vis_feats;
+    }
+
+    SharedVisHandle InternVL3VisionEngine::enqueue_extract_visual_features(
+        const std::vector<cv::Mat>& images,
+        const GenerateConfig& gen_config
+    ) {
+
+        auto handle = SharedVisHandle();
+        
+        VisualFeatures vis_feats = VisualFeatures();
+        std::vector<float> patches_overall;
+        // CPU Preprocess TODO: preprocess on cuda
+        for (const cv::Mat& image : images) {
+            std::vector<cv::Mat> patches = dynamic_preprocess(
+                image, 
+                gen_config.min_patch,
+                gen_config.max_patch,
+                gen_config.patch_size,
+                gen_config.use_thumbnail
+            );
+
+            for (const cv::Mat& patch : patches) {
+                std::vector<float> flat_data = transform_to_fp32_chw(patch);
+                patches_overall.insert(patches_overall.end(), flat_data.begin(), flat_data.end());
+            }
+
+            vis_feats.image_patch_counts.push_back(patches.size());
+        }
+
+        // 预先申请一整块连续显存，用于存放所有图片的特征
+        size_t tokens_per_patch = m_config.patch_token_size * m_config.embedding_dim;
+        void* d_all_outputs_bf16 = nullptr;
+        cudaMallocAsync(&d_all_outputs_bf16, vis_feats.total_patches() * tokens_per_patch * sizeof(uint16_t), m_stream);
+
+        vis_engine->context->setInputShape(
+            "input", 
+            nvinfer1::Dims4{
+                m_config.max_vis_batch, 
+                3, 
+                gen_config.patch_size, 
+                gen_config.patch_size
+            }
+        );
+
+        // todo not neccessary 整除，might need to pad?
+        for (size_t i = 0; i < vis_feats.total_patches(); i += m_config.max_vis_batch) {
+
+            void* d_current_output_offset = (uint16_t*)d_all_outputs_bf16 + (i * tokens_per_patch);
+
+            void *d_input = nullptr, *d_output_fp16 = nullptr, *d_output_bf16 = nullptr;
+            size_t out_elements = m_config.max_vis_batch * m_config.patch_token_size * m_config.embedding_dim;
+
+            cudaMallocAsync(&d_input, m_config.max_vis_batch * 3 * gen_config.patch_size * gen_config.patch_size * sizeof(__half), m_stream);
+            cudaMallocAsync(&d_output_fp16, out_elements * sizeof(uint16_t), m_stream);
+            cudaMallocAsync(&d_output_bf16, out_elements * sizeof(uint16_t), m_stream);
+
+            std::vector<__half> host_input_half;
+            // BUG: patches_overall need to 偏移
+            // TODO : do precision convert in cuda, faster?
+            for (float f : patches_overall) host_input_half.push_back(__float2half(f));
+            cudaMemcpyAsync(d_input, host_input_half.data(), host_input_half.size() * sizeof(__half), cudaMemcpyHostToDevice);
+
+            vis_engine->context->setTensorAddress("input", d_input);
+            vis_engine->context->setTensorAddress("output", d_output_fp16);
+            vis_engine->context->enqueueV3(m_stream);
+            launch_fp16_to_bf16(d_output_fp16, d_current_output_offset, out_elements, m_stream);
+
+            cudaFreeAsync(d_input, m_stream);
+            cudaFreeAsync(d_output_fp16, m_stream);
+        }
+
+        // [Asynchronous Memory Management]
+        // We capture a local copy of m_stream to avoid dependency on 'this' pointer.
+        // This ensures that even if the VisionEngine is destroyed, the shared_ptr's 
+        // custom deleter can safely release the GPU memory via cudaFreeAsync 
+        // without accessing a dangling 'this' pointer.
+        cudaStream_t stream_for_deleter = m_stream;
+        vis_feats.embeddings_ptr = std::shared_ptr<void>(d_all_outputs_bf16, [stream_for_deleter](void* ptr) {
+            if (ptr) {
+                cudaFreeAsync(ptr, stream_for_deleter);
+            }
+        });
+
+        vis_feats.dtype = DataType::BF16;
+
+        handle->visual_features = vis_feats;
+        handle->is_finished.store(true);
+
+        return handle;
 
     }
+
 
 } // namespace trt_multimodal

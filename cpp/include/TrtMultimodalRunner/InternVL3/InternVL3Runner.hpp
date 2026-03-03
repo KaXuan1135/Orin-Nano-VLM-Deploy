@@ -15,27 +15,30 @@ public:
 
     ~InternVL3Runner() override;
 
-    GenerateResult generate(
+    void generate(
         const std::vector<cv::Mat>& images, 
         const std::string& user_prompt,
-        const GenerateConfig& gen_config
+        const GenerateConfig& gen_config,
+        GenerateResult& gen_result
     ) override;
 
-    VisualFeatures extract_visual_features(
+    void extract_visual_features(
         const std::vector<cv::Mat>& images,
-        const GenerateConfig& gen_config
+        const GenerateConfig& gen_config,
+        VisualFeatures& vis_feats
     ) override;
 
-    GenerateResult generate_from_features(
+    void generate_from_features(
         const VisualFeatures& visual_features,
         const std::string& user_prompt,
-        const GenerateConfig& gen_config
+        const GenerateConfig& gen_config,
+        GenerateResult& gen_result
     ) override;
-
-private:
 
     InternVL3VisionEngine vis_engine;
     InternVL3LLMEngine llm_engine;
+
+private:
 
     ModelConfig m_config;
     cudaStream_t m_stream;

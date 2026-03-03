@@ -17,30 +17,38 @@ InternVL3Runner::~InternVL3Runner() {
     if (m_stream) cudaStreamDestroy(m_stream);
 }
 
-GenerateResult InternVL3Runner::generate(
+void InternVL3Runner::generate(
     const std::vector<cv::Mat>& images, 
     const std::string& user_prompt,
-    const GenerateConfig& gen_config) 
-{
-    return llm_engine.generate_from_features(
-        vis_engine.extract_visual_features(images, gen_config), 
-        user_prompt, 
-        gen_config);
-}
-
-VisualFeatures InternVL3Runner::extract_visual_features(
-    const std::vector<cv::Mat>& images,
-    const GenerateConfig& gen_config
+    const GenerateConfig& gen_config,
+    GenerateResult& gen_result
 ) {
-    return vis_engine.extract_visual_features(images, gen_config);
+    VisualFeatures vis_feats = VisualFeatures();
+    vis_engine.extract_visual_features(images, gen_config, vis_feats);
+    
+    llm_engine.generate_from_features(
+        vis_feats, 
+        user_prompt, 
+        gen_config,
+        gen_result
+    );
 }
 
-GenerateResult InternVL3Runner::generate_from_features(
+void InternVL3Runner::extract_visual_features(
+    const std::vector<cv::Mat>& images,
+    const GenerateConfig& gen_config,
+    VisualFeatures& vis_feats
+) {
+    vis_engine.extract_visual_features(images, gen_config, vis_feats);
+}
+
+void InternVL3Runner::generate_from_features(
     const VisualFeatures& vis_features,
     const std::string& user_prompt,
-    const GenerateConfig& gen_config
+    const GenerateConfig& gen_config,
+    GenerateResult& gen_result
 ) {
-    return llm_engine.generate_from_features(vis_features, user_prompt, gen_config);
+    llm_engine.generate_from_features(vis_features, user_prompt, gen_config, gen_result);
 }
 
 } // namespace trt_multimodal

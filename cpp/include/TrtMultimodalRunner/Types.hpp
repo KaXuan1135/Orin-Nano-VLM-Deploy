@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <string>
 #include <vector>
 #include <memory>
@@ -104,91 +105,96 @@ struct VisualFeatures {
 
 struct GenerateResult {
 
+    GenerateConfig gen_config;
+
     std::uint64_t request_id;
+    std::uint64_t ttft_request_id;
     
     std::string system_prompt;
     std::string user_prompt;
+
+    std::vector<int32_t> input_tokens;
+    std::vector<std::vector<int32_t>> outputs_tokens; // beams of output tokens
     std::vector<std::string> outputs_text; // beams of output text
 
-    int32_t input_tokens_len;
-    std::vector<int32_t> outputs_tokens_len;
+    std::vector<std::vector<int32_t>> last_outputs_token; // last output tokens (probably not only one, so still nested vector), for streaming purpose
+    std::vector<std::string> last_outputs_text;
 
-    bool done_output = false; // For Asynchonize output, determine if this result is complete.
+    int32_t input_tokens_len() const {
+        return input_tokens.size();
+    }
+
+    std::vector<int32_t> outputs_tokens_len() const {
+        std::vector<int32_t> outputs_tokens_len;
+        for (auto const& output_tokens : outputs_tokens) {
+            outputs_tokens_len.push_back(output_tokens.size());
+        }
+        return outputs_tokens_len;
+    }
+
+    std::atomic<bool> done_output{false}; // For Asynchonize output, determine if this result is complete.
     std::vector<bool> full_stops; // True if model did complete output for each beam, False if stop because of max_new tokens reach limit
     
+    std::string error_msg;
+    std::atomic<bool> has_error{false};
+
     // Only Return if Generate Config :: profiling == true
-    double generation_latency_ms = -1; // 文本生成耗时
-    double time_to_first_token_ms = -1;
+    std::chrono::high_resolution_clock::time_point start_gen;
+    std::chrono::high_resolution_clock::time_point end_gen;
+    std::chrono::high_resolution_clock::time_point start_ttft;
+    std::chrono::high_resolution_clock::time_point end_ttft;
+    std::atomic<bool> first_token_captured{false};
+
+    double generation_latency_ms() const {
+        if (!gen_config.profiling) return 0.0;
+        return std::chrono::duration<double, std::milli>(end_gen - start_gen).count();
+    }
+
+    double time_to_first_token_ms() const {
+        if (!gen_config.profiling) return 0.0;
+        return std::chrono::duration<double, std::milli>(end_ttft - start_ttft).count();
+    }
+
 
     std::vector<int32_t> total_tokens() const {
         std::vector<int32_t> total_tokens;
-        for (const auto& output_tokens_len : outputs_tokens_len) {
-            total_tokens.push_back(output_tokens_len + input_tokens_len);
+        for (const auto& output_tokens_len : outputs_tokens_len()) {
+            total_tokens.push_back(output_tokens_len + input_tokens_len());
         }
         return total_tokens;
     }
     
-    // First Beams Inferenc Speed
+    // First Beams Inference Speed
     double tokens_per_second() const {
-        if (generation_latency_ms <= 0) return 0.0;
-        return (outputs_tokens_len[0] / generation_latency_ms) * 1000.0;
+        if (generation_latency_ms() <= 0) return 0.0;
+        return (outputs_tokens_len()[0] / generation_latency_ms()) * 1000.0;
     }
 
     // Whole System Throughput
     double system_throughput() const {
-        if (generation_latency_ms <= 0) return 0.0;
-        return (std::accumulate(outputs_tokens_len.begin(), outputs_tokens_len.end(), 0.0) / generation_latency_ms) * 1000.0;
+        double lat = generation_latency_ms();
+        if (lat <= 0) return 0.0;
+        auto lens = outputs_tokens_len(); 
+        return (std::accumulate(lens.begin(), lens.end(), 0.0) / lat) * 1000.0;
     }
 
 };
 
 //Asynchronous
-enum class TaskType { FULL_GEN, VISION_ONLY, GEN_FROM_FEATURES };
+struct GenHandle {
+    std::atomic<bool> is_finished{false};
+    GenerateResult generate_result;
 
-struct VisFeaturesTask {
-    uint64_t request_id;
-    std::vector<cv::Mat> images;
-    std::string prompt;
-    GenerateConfig config;
-    // 回调函数，当有一个 Token 产生或整段结束时触发
-    std::function<void(std::string, bool)> callback; 
+    // 使用 mutex 保护，因为 Runner 在写，RabbitMQ/Main 在读
+    mutable std::mutex data_mutex;
 };
 
-struct GenerateTask {
-    uint64_t request_id;
-    std::vector<cv::Mat> images;
-    std::string prompt;
-    GenerateConfig config;
-    // 回调函数，当有一个 Token 产生或整段结束时触发
-    std::function<void(std::string, bool)> callback; 
+struct VisHandle {
+    std::atomic<bool> is_finished{false};
+    VisualFeatures visual_features;
 };
 
-
-struct VisionTask {
-    uint64_t request_id;
-    std::vector<cv::Mat> images;
-    std::function<void(VisualFeatures)> callback; // 返回提取好的特征
-};
-
-struct LLMTask {
-    uint64_t request_id;
-    VisualFeatures features;
-    std::string prompt;
-    std::function<void(std::string, bool)> callback;
-};
-
-struct AsyncInferenceTask {
-    TaskType type;
-    // 数据载体
-    std::vector<cv::Mat> images;
-    std::string user_prompt;
-    GenerateConfig gen_config;
-    VisualFeatures visual_features; // 仅用于 FROM_FEATURES
-    
-    // 回调函数载体
-    std::function<void(GenerateResult)> gen_callback;
-    std::function<void(VisualFeatures)> vis_callback;
-};
-
+using SharedGenHandle = std::shared_ptr<GenHandle>;
+using SharedVisHandle = std::shared_ptr<VisHandle>;
 
 } // namespace trt_multimodal

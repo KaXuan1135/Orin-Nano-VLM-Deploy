@@ -15,10 +15,25 @@ public:
         const cudaStream_t& stream
     );    
 
-    GenerateResult generate_from_features(
+    void generate_from_features(
+        const VisualFeatures& visual_features,
+        const std::string& user_prompt,
+        const GenerateConfig& generate_config,
+        GenerateResult& gen_result
+    );
+
+    SharedGenHandle enqueue_generate_from_features(
         const VisualFeatures& visual_features,
         const std::string& user_prompt,
         const GenerateConfig& generate_config
+    );
+
+    std::unique_ptr<tensorrt_llm::executor::Executor> llm_executor;
+
+    void update_response(
+        std::vector<GenerateResult*>& request_results,
+        uint32_t timeout_ms,
+        bool time_to_first_token_run
     );
 
 private:
@@ -26,7 +41,6 @@ private:
     ModelConfig m_config;
     cudaStream_t m_stream;
 
-    std::unique_ptr<tensorrt_llm::executor::Executor> llm_executor;
     std::unique_ptr<tokenizers::Tokenizer> tokenizer;
     TokenizerMetadata metadata;
 
@@ -35,6 +49,13 @@ private:
         std::vector<size_t> total_seq_len,
         size_t input_len
     );
+
+
+    std::vector<std::string> decode_outputs_unflat(
+        const std::vector<std::vector<int32_t>> beams_tokens,
+        size_t input_len
+    );
+
 };
 
 } // namespace trt_multimodal

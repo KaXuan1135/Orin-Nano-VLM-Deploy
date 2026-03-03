@@ -16,30 +16,52 @@ AsyncInternVL3Runner::~AsyncInternVL3Runner()
     // delete m_sync_runner?
 }
 
-void AsyncInternVL3Runner::generate_async(
+SharedGenHandle AsyncInternVL3Runner::enqueue_generate(
     const std::vector<cv::Mat>& images, 
     const std::string& user_prompt,
     const GenerateConfig& gen_config) 
 {
+    SharedGenHandle dummy;
+    return dummy;
     // return llm_engine.generate_from_features(
     //     vis_engine.extract_visual_features(images, gen_config), 
     //     user_prompt, 
     //     gen_config);
 }
 
-void AsyncInternVL3Runner::extract_visual_features_async(
+SharedVisHandle AsyncInternVL3Runner::enqueue_extract_visual_features(
     const std::vector<cv::Mat>& images,
     const GenerateConfig& gen_config
 ) {
-    // return vis_engine.extract_visual_features(images, gen_config);
+
+    auto handle = m_sync_runner.vis_engine.enqueue_extract_visual_features(images, gen_config);
+    // m_task_map[handle.generate_result.request_id] = handle; // 存入 map 供 listener 查找
+    return handle;
 }
 
-void AsyncInternVL3Runner::generate_from_features_async(
+SharedGenHandle AsyncInternVL3Runner::enqueue_generate_from_features(
     const VisualFeatures& vis_features,
     const std::string& user_prompt,
     const GenerateConfig& gen_config
 ) {
-    // return llm_engine.generate_from_features(vis_features, user_prompt, gen_config);
+
+    auto handle = m_sync_runner.llm_engine.enqueue_generate_from_features(vis_features, user_prompt, gen_config);
+    // m_task_map[handle.generate_result.request_id] = handle; // 存入 map 供 listener 查找, different task_map?
+    m_inflight_llm_tasks[handle->generate_result.request_id] = handle;
+    return handle;
+
 }
+void AsyncInternVL3Runner::generate_listener_loop(
+) {
+    while (!m_stop) {
+
+        std::vector<GenerateResult*> gen_results;
+        for (auto& [rid, handle] : m_inflight_llm_tasks) {
+            gen_results.push_back(&(handle->generate_result));
+        }
+        m_sync_runner.llm_engine.update_response(gen_results, 1000, false);
+    }
+}
+
 
 } // namespace trt_multimodal

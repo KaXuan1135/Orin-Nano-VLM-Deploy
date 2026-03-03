@@ -3,7 +3,7 @@
 #include <string>
 #include <memory>
 
-#include "Types.hpp"
+#include "TrtMultimodalRunner/Types.hpp"
 
 namespace cv { class Mat; }
 
@@ -19,18 +19,18 @@ public:
 
     static std::unique_ptr<IAsyncMultimodalRunner> initialize();
 
-    virtual void generate_async(
+    virtual SharedGenHandle enqueue_generate(
         const std::vector<cv::Mat>& images, 
         const std::string& user_prompt,
         const GenerateConfig& gen_config
     ) = 0; 
 
-    virtual void extract_visual_features_async(
+    virtual SharedVisHandle enqueue_extract_visual_features(
         const std::vector<cv::Mat>& images,
         const GenerateConfig& gen_config
     ) = 0;
 
-    virtual void generate_from_features_async(
+    virtual SharedGenHandle enqueue_generate_from_features(
         const VisualFeatures& visual_features,
         const std::string& user_prompt,
         const GenerateConfig& gen_config

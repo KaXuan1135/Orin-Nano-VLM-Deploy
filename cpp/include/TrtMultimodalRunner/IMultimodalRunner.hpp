@@ -19,21 +19,24 @@ public:
 
     static std::unique_ptr<IMultimodalRunner> initialize();
 
-    virtual GenerateResult generate(
+    virtual void generate(
         const std::vector<cv::Mat>& images, 
         const std::string& user_prompt,
-        const GenerateConfig& gen_config
+        const GenerateConfig& gen_config,
+        GenerateResult& gen_result
     ) = 0; 
 
-    virtual VisualFeatures extract_visual_features(
+    virtual void extract_visual_features(
         const std::vector<cv::Mat>& images,
-        const GenerateConfig& gen_config
+        const GenerateConfig& gen_config,
+        VisualFeatures& vis_feats
     ) = 0;
 
-    virtual GenerateResult generate_from_features(
+    virtual void generate_from_features(
         const VisualFeatures& visual_features,
         const std::string& user_prompt,
-        const GenerateConfig& gen_config
+        const GenerateConfig& gen_config,
+        GenerateResult& gen_result
     ) = 0;
 
 };

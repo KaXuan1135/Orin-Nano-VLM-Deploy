@@ -20,31 +20,32 @@ void print_gen_summary(const trt_multimodal::GenerateResult& res) {
     std::cout << "\n" << BOLD << CYAN << " 📊 Inference Performance Summary" << RESET << "\n";
     std::cout << " -------------------------------------------" << "\n";
 
-    std::cout << "  " << std::left << std::setw(28) << "Input Tokens:" << res.input_tokens_len << "\n";
+    std::cout << "  " << std::left << std::setw(28) << "Input Tokens:" << res.input_tokens_len() << "\n";
     
-    for (size_t i = 0; i < res.outputs_tokens_len.size(); ++i) {
+    for (size_t i = 0; i < res.outputs_tokens_len().size(); ++i) {
         std::string label = "Output Tokens (Beam " + std::to_string(i) + "):";
-        std::cout << "  " << std::left << std::setw(28) << label << res.outputs_tokens_len[i] << "\n";
+        std::cout << "  " << std::left << std::setw(28) << label << res.outputs_tokens_len()[i] << "\n";
     }
 
     std::cout << " -------------------------------------------" << "\n";
 
     std::cout << std::fixed << std::setprecision(2);
     std::cout << "  " << std::left << std::setw(28) << "Total Latency:" 
-              << GREEN << res.generation_latency_ms << RESET << " ms\n";
+              << GREEN << res.generation_latency_ms() << RESET << " ms\n";
     
-    if (res.time_to_first_token_ms > 0) {
+    if (res.time_to_first_token_ms() > 0) {
         std::cout << "  " << std::left << std::setw(28) << "Time to First Token (TTFT):" 
-                  << GREEN << res.time_to_first_token_ms << RESET << " ms\n";
+                  << GREEN << res.time_to_first_token_ms() << RESET << " ms\n";
     }
 
     std::cout << " -------------------------------------------" << "\n";
 
     std::cout << "  " << std::left << std::setw(28) << "Tokens per Second (TPS):" 
               << BOLD << res.tokens_per_second() << RESET << " tok/s\n";
+    
     ss << "  " << std::left << std::setw(28) << "System Throughput:" 
        << BOLD << res.system_throughput() << RESET << " tok/s\n";
-    
+
     // --- 2. 模型输出文本部分 ---
     std::cout << "\n" << BOLD << YELLOW << " ✉️  Model Generated Outputs" << RESET << "\n";
     std::cout << " ===========================================" << "\n";
@@ -117,14 +118,19 @@ int main(int argc, char** argv) {
         frames.push_back(std::move(rgbImg));
     }
 
-    trt_multimodal::VisualFeatures vis_feats = runner->extract_visual_features(
+    trt_multimodal::VisualFeatures vis_feats;
+    runner->extract_visual_features(
         frames,
-        gen_config
+        gen_config,
+        vis_feats
     );
-    trt_multimodal::GenerateResult gen_result_1 = runner->generate_from_features(
+
+    trt_multimodal::GenerateResult gen_result_1;
+    runner->generate_from_features(
         vis_feats,
         inputText,
-        gen_config
+        gen_config,
+        gen_result_1
     );
 
     print_gen_summary(gen_result_1);
@@ -145,10 +151,12 @@ int main(int argc, char** argv) {
         frames.push_back(std::move(rgbImg));
     }
 
-    trt_multimodal::GenerateResult gen_result_2 = runner->generate(
+    trt_multimodal::GenerateResult gen_result_2;
+    runner->generate(
         frames,
         inputText,
-        gen_config
+        gen_config,
+        gen_result_2
     );
 
     print_gen_summary(gen_result_2);
