@@ -1,11 +1,12 @@
 #include <vector>
 #include <string>
+#include <thread>
 #include <iomanip>
 #include <iostream>
 #include <filesystem>
 #include <opencv2/opencv.hpp>
 
-#include "TrtMultimodalRunner/IMultimodalRunner.hpp"
+#include "TrtMultimodalRunner/IAsyncMultimodalRunner.hpp"
 
 void print_gen_summary(const trt_multimodal::GenerateResult& res) {
     std::stringstream ss;
@@ -106,7 +107,7 @@ int main(int argc, char** argv) {
     gen_config.streaming = true;
     gen_config.profiling = true;
 
-    std::unique_ptr<trt_multimodal::IMultimodalRunner> runner = trt_multimodal::IMultimodalRunner::create(m_config);
+    std::unique_ptr<trt_multimodal::IAsyncMultimodalRunner> runner = trt_multimodal::IAsyncMultimodalRunner::create(m_config);
 
     std::vector<cv::Mat> frames;
     for (auto path : imagePaths){
@@ -117,22 +118,53 @@ int main(int argc, char** argv) {
         frames.push_back(std::move(rgbImg));
     }
 
-    trt_multimodal::VisualFeatures vis_feats;
-    runner->extract_visual_features(
-        frames,
-        gen_config,
-        vis_feats
+    // trt_multimodal::VisualFeatures vis_feats;
+    // runner->extract_visual_features(
+    //     frames,
+    //     gen_config,
+    //     vis_feats
+    // );
+
+    // trt_multimodal::GenerateResult gen_result;
+    // runner->generate_from_features(
+    //     vis_feats,
+    //     inputText,
+    //     gen_config,
+    //     gen_result
+    // );
+
+    // print_gen_summary(gen_result);
+
+
+
+    std::cout << "[Main] Step 1: Enqueue Visual Extraction..." << std::endl;
+    auto vis_handle = runner->enqueue_extract_visual_features(frames, gen_config);
+
+    // 等待视觉特征准备好 (在真正的异步逻辑里，这通常由回调或状态机处理)
+    while (!vis_handle->is_finished.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    std::cout << "[Main] Visual features extracted!" << std::endl;
+
+    std::cout << "[Main] Step 2: Enqueue LLM Generation..." << std::endl;
+    auto gen_handle = runner->enqueue_generate_from_features(
+        vis_handle->visual_features, 
+        inputText, 
+        gen_config
     );
 
-    trt_multimodal::GenerateResult gen_result;
-    runner->generate_from_features(
-        vis_feats,
-        inputText,
-        gen_config,
-        gen_result
-    );
+    // 4. 轮询结果 (非阻塞模拟)
+    while (!gen_handle->generate_result.done_output.load()) {
+        // 在这里主线程可以去做别的事情，比如打印进度
+        if (!gen_handle->generate_result.outputs_tokens.empty()) {
+            std::cout << "Generating... tokens count: " 
+                      << gen_handle->generate_result.outputs_tokens[0].size() << std::endl;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
 
-    print_gen_summary(gen_result);
+    print_gen_summary(gen_handle->generate_result);
 
     return 0;
+
 }

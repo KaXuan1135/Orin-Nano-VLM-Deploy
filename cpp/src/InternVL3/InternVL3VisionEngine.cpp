@@ -124,6 +124,7 @@ namespace trt_multimodal {
     ) {
 
         std::vector<float> patches_overall;
+        // CPU Preprocess TODO: preprocess on cuda
         for (const cv::Mat& image : images) {
             std::vector<cv::Mat> patches = dynamic_preprocess(
                 image, 
@@ -198,7 +199,7 @@ namespace trt_multimodal {
         const GenerateConfig& gen_config
     ) {
 
-        auto handle = SharedVisHandle();
+        auto handle = std::make_shared<VisHandle>();
         
         VisualFeatures vis_feats = VisualFeatures();
         std::vector<float> patches_overall;
@@ -273,12 +274,11 @@ namespace trt_multimodal {
                 cudaFreeAsync(ptr, stream_for_deleter);
             }
         });
-
+        
         vis_feats.dtype = DataType::BF16;
 
         handle->visual_features = vis_feats;
         handle->is_finished.store(true);
-
         return handle;
 
     }

@@ -88,6 +88,9 @@ struct GenerateConfig {
 };
 
 struct VisualFeatures {
+
+    std::uint64_t request_id;
+
     std::shared_ptr<void> embeddings_ptr;
     std::vector<int32_t> image_patch_counts;
     DataType dtype = DataType::UNKNOWN;

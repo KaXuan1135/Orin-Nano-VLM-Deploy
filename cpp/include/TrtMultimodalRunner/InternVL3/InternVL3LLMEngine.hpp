@@ -28,8 +28,6 @@ public:
         const GenerateConfig& generate_config
     );
 
-    std::unique_ptr<tensorrt_llm::executor::Executor> llm_executor;
-
     void update_response(
         std::vector<GenerateResult*>& request_results,
         uint32_t timeout_ms,
@@ -40,18 +38,11 @@ private:
 
     ModelConfig m_config;
     cudaStream_t m_stream;
-
+    std::unique_ptr<tensorrt_llm::executor::Executor> llm_executor;
     std::unique_ptr<tokenizers::Tokenizer> tokenizer;
     TokenizerMetadata metadata;
 
-    std::vector<std::string> decode_outputs_cpp(
-        const std::vector<int32_t>& output_ids, // 扁平化的 ids
-        std::vector<size_t> total_seq_len,
-        size_t input_len
-    );
-
-
-    std::vector<std::string> decode_outputs_unflat(
+    std::vector<std::string> decode_outputs(
         const std::vector<std::vector<int32_t>> beams_tokens,
         size_t input_len
     );

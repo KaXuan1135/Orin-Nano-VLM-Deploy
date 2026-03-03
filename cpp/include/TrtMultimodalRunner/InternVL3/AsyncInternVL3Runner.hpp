@@ -44,6 +44,10 @@ private:
     std::thread m_worker;
     std::atomic<bool> m_stop;
     std::condition_variable m_cv;
+
+    uint64_t vis_rid = 0;
+    mutable std::mutex m_map_mutex;
+    std::unordered_map<uint64_t, SharedVisHandle> m_inflight_vis_tasks;
     std::unordered_map<uint64_t, SharedGenHandle> m_inflight_llm_tasks;
 
     void generate_listener_loop();

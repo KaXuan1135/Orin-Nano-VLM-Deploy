@@ -137,28 +137,7 @@ std::string strip(const std::string& s) {
     return std::string(start, end + 1);
 }
 
-std::vector<std::string> InternVL3LLMEngine::decode_outputs_cpp(
-    const std::vector<int32_t>& flat_beams_tokens, // 扁平化的 ids
-    std::vector<size_t> total_seq_len,
-    size_t input_len
-) {
-    std::vector<std::string> results(m_config.max_beam_width);
-
-    for (int m = 0; m < m_config.max_beam_width; ++m) {
-        std::vector<int32_t> generated_tokens;
-        for (int i = input_len; i < total_seq_len[m]; ++i) {
-            int idx = m * total_seq_len[m] + i;
-            generated_tokens.push_back(flat_beams_tokens[idx]);
-        }
-
-        std::string text = tokenizer->Decode(generated_tokens);
-        results[m] = strip(text);
-    }
-
-    return results;
-}
-
-std::vector<std::string> InternVL3LLMEngine::decode_outputs_unflat(
+std::vector<std::string> InternVL3LLMEngine::decode_outputs(
     // const std::vector<int32_t>& flat_beams_tokens, // 扁平化的 ids
     const std::vector<std::vector<int32_t>> beams_tokens,
     size_t input_len
@@ -180,7 +159,6 @@ std::vector<std::string> InternVL3LLMEngine::decode_outputs_unflat(
 
     return results;
 }
-
 
 void InternVL3LLMEngine::generate_from_features(
     const VisualFeatures& vis_features,
@@ -237,8 +215,6 @@ void InternVL3LLMEngine::generate_from_features(
         gen_config,
         metadata
     );
-
-    std::vector<std::vector<int>> beams_tokens(m_config.max_beam_width);
 
     if (gen_config.profiling) {
         gen_result.start_gen = std::chrono::high_resolution_clock::now();
@@ -298,7 +274,7 @@ SharedGenHandle InternVL3LLMEngine::enqueue_generate_from_features(
     const GenerateConfig& gen_config
 ) {
 
-    auto handle = SharedGenHandle();
+    auto handle = std::make_shared<GenHandle>();
 
     //Construct Input Prompts
     std::string pre_prompt = "<|im_start|>system\n" + gen_config.system_prompt + "<|im_end|>\n<|im_start|>user\n";
@@ -349,127 +325,22 @@ SharedGenHandle InternVL3LLMEngine::enqueue_generate_from_features(
         metadata
     );
 
-    std::chrono::high_resolution_clock::time_point start_gen;
-    std::chrono::high_resolution_clock::time_point end_gen;
-    std::chrono::high_resolution_clock::time_point start_ttft;
-    std::chrono::high_resolution_clock::time_point end_ttft;
-
-    std::vector<std::vector<int>> beams_tokens(m_config.max_beam_width);
-    bool is_finished = false;
-    bool first_token_capture = false;
-
     if (gen_config.profiling) {
-        start_gen = std::chrono::high_resolution_clock::now();
+        handle->generate_result.start_gen = std::chrono::high_resolution_clock::now();
         if (gen_config.streaming) {
-            start_ttft = std::chrono::high_resolution_clock::now();
+            handle->generate_result.start_ttft = std::chrono::high_resolution_clock::now();
         }
     }
 
-    // TODO: 设计成异步
     std::uint64_t request_id = llm_executor->enqueueRequest(request);
-    while (!is_finished) {
-        auto responses = llm_executor->awaitResponses(std::chrono::milliseconds(1000));
-        for (auto const& resp : responses) {
-            std::uint64_t rid = resp.getRequestId();
-
-            if (rid == request_id) {
-                if (resp.hasError()) throw std::runtime_error("TRT-LLM Error for Request " + std::to_string(rid) + ": " + resp.getErrorMsg());
-                
-                // Possibly some profiling bug here, the first tokens might not be only 1 token, but like a batch
-                if(gen_config.profiling && gen_config.streaming && !first_token_capture) {
-                    first_token_capture = true;
-                    end_ttft = std::chrono::high_resolution_clock::now();
-                }
-
-                auto const& result = resp.getResult();
-
-                // 提取 Token 到对应的 Request 和对应的 Beam
-                assert (m_config.max_beam_width == result.outputTokenIds.size());
-                for (size_t beam_idx = 0; beam_idx < m_config.max_beam_width; ++beam_idx) {
-                    auto const& tokens = result.outputTokenIds[beam_idx];
-                    for (auto tokenId : tokens) {
-                        beams_tokens[beam_idx].push_back(static_cast<int>(tokenId));
-                    }
-                }
-
-                if (result.isFinal) is_finished = true;
-            }
-            
-        }
-    }
-
-    if (gen_config.profiling) {
-        end_gen = std::chrono::high_resolution_clock::now();
-    }
-
-    if (gen_config.profiling && !gen_config.streaming) {
-
-        GenerateConfig ttft_config = gen_config;
-        ttft_config.max_new_tokens = 1;
-
-        // 这里再跑一次 llm executor，服用之前的 visual encoded embeddings
-        tle::Request ttft_request = create_request_from_dict(
-            input_ids,
-            vis_features,
-            m_config,
-            ttft_config,
-            metadata
-        );
-
-        start_ttft = std::chrono::high_resolution_clock::now();
-        std::uint64_t ttft_request_id = llm_executor->enqueueRequest(ttft_request);
-        bool ttft_is_finished = false;
-        
-        while (!ttft_is_finished) {
-            auto responses = llm_executor->awaitResponses(std::chrono::milliseconds(1000));
-            for (auto const& resp : responses) {
-                std::uint64_t rid = resp.getRequestId();
-                if (rid == ttft_request_id) {
-                    if (resp.hasError()) throw std::runtime_error("TRT-LLM Error for Request " + std::to_string(rid) + ": " + resp.getErrorMsg());
-                    
-                    auto const& result = resp.getResult();
-                    if (result.isFinal) { // Robust
-                        end_ttft = std::chrono::high_resolution_clock::now();
-                        ttft_is_finished = true;
-                    }
-                }       
-            }
-        }
-    }
-
-    std::vector<int32_t> flat_beams_tokens; // flat_beams_tokens
-    std::vector<size_t> seq_len_per_beam;
-    for (int m = 0; m < m_config.max_beam_width; ++m) {
-        flat_beams_tokens.insert(flat_beams_tokens.end(), 
-                                beams_tokens[m].begin(), 
-                                beams_tokens[m].end());
-        seq_len_per_beam.push_back(beams_tokens[m].size());
-    }
-
-    size_t input_len = input_ids.size();
-
-    std::vector<std::string> batch_decoded = decode_outputs_cpp(
-        flat_beams_tokens, 
-        seq_len_per_beam,
-        gen_config.streaming ? 0 : input_len
-    );
-
-    GenerateResult gen_result;
-    gen_result.system_prompt = gen_config.system_prompt;
-    gen_result.user_prompt = user_prompt;
-    gen_result.done_output = true;
-    // gen_result.input_tokens_len = input_len;
-
-    // if (gen_config.profiling) {
-    //     gen_result.generation_latency_ms = std::chrono::duration<double, std::milli>(end_gen - start_gen).count();
-    //     gen_result.time_to_first_token_ms = std::chrono::duration<double, std::milli>(end_ttft - start_ttft).count();
-    // }
-
-    for (int32_t m = 0; m < m_config.max_beam_width; ++m) {
-        // gen_result.outputs_tokens_len.push_back(gen_config.streaming ? beams_tokens[m].size() : beams_tokens[m].size() - input_len);
-        gen_result.full_stops.push_back(beams_tokens[m].back() == metadata.eos_id);
-        // gen_result.outputs_text.push_back(batch_decoded[m]);
-    }
+    handle->generate_result.gen_config = gen_config;
+    handle->generate_result.request_id = request_id;
+    handle->generate_result.system_prompt = gen_config.system_prompt;
+    handle->generate_result.user_prompt = user_prompt;
+    handle->generate_result.input_tokens = input_ids;
+    handle->generate_result.start_gen = std::chrono::high_resolution_clock::now();
+    handle->generate_result.outputs_tokens.resize(m_config.max_beam_width);
+    handle->generate_result.last_outputs_token.resize(m_config.max_beam_width);
 
     return handle;
 
@@ -514,14 +385,14 @@ void InternVL3LLMEngine::update_response(
             res->last_outputs_token[beam_idx] = tokens;
         }
 
-        res->last_outputs_text = decode_outputs_unflat(
+        res->last_outputs_text = decode_outputs(
             res->last_outputs_token,
             res->gen_config.streaming ? 0 : res->input_tokens_len()
         );
 
         if (result.isFinal && !time_to_first_token_run) {
             res->done_output.store(true);
-            res->outputs_text = decode_outputs_unflat(
+            res->outputs_text = decode_outputs(
                 res->outputs_tokens,
                 res->gen_config.streaming ? 0 : res->input_tokens_len()
             );
@@ -537,8 +408,5 @@ void InternVL3LLMEngine::update_response(
 
     }
 }
-
-
-
 
 } // namespace trt_multimodal
