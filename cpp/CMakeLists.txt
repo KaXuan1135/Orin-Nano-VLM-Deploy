@@ -58,3 +58,6 @@ target_link_libraries(test_vlm_sync PRIVATE ${PROJECT_NAME})
 
 add_executable(test_vlm_async tests/test_vlm_async.cpp)
 target_link_libraries(test_vlm_async PRIVATE ${PROJECT_NAME})
+
+add_executable(test_vlm_async_aio tests/test_vlm_async_aio.cpp)
+target_link_libraries(test_vlm_async_aio PRIVATE ${PROJECT_NAME})

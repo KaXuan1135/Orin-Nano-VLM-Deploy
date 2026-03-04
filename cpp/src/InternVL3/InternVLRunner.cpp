@@ -24,7 +24,7 @@ void InternVL3Runner::generate(
     GenerateResult& gen_result
 ) {
     VisualFeatures vis_feats = VisualFeatures();
-    vis_engine.extract_visual_features(images, gen_config, vis_feats);
+    vis_engine.extract_visual_features(images, gen_config, vis_feats, true);
     
     llm_engine.generate_from_features(
         vis_feats, 
@@ -39,7 +39,7 @@ void InternVL3Runner::extract_visual_features(
     const GenerateConfig& gen_config,
     VisualFeatures& vis_feats
 ) {
-    vis_engine.extract_visual_features(images, gen_config, vis_feats);
+    vis_engine.extract_visual_features(images, gen_config, vis_feats, true);
 }
 
 void InternVL3Runner::generate_from_features(

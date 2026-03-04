@@ -72,22 +72,29 @@ void print_gen_summary(const trt_multimodal::GenerateResult& res) {
 
 int main(int argc, char** argv) {
 
-    std::string inputText = "Please describe the 2 images.";
+    std::string inputText = "Can you describe the 6 images?";
 
     std::vector<std::string> imagePaths = {
         "/home/pi/kx/sample_images/dog.jpg",
-        "/home/pi/kx/sample_images/cat.jpg"
+        "/home/pi/kx/sample_images/cat.jpg",
+        "/home/pi/kx/sample_images/tiger.jpg",
+        "/home/pi/kx/sample_images/wolf.jpg",
+        "/home/pi/kx/sample_images/apple.jpg",
+        "/home/pi/kx/sample_images/orange.jpg"
     };
+
+    std::string model_path =  "/home/pi/kx/pt2engine_vlm/models/InternVL3-1B_i8";
 
     trt_multimodal::ModelConfig m_config = trt_multimodal::ModelConfig();
     m_config.model_type = trt_multimodal::ModelType::Type::INTERNVL3;
-    m_config.llm_engine_path = "/home/pi/kx/pt2engine_vlm/models/InternVL3-1B_i8/InternVL3-1B_llm_engine";
-    m_config.vis_engine_path = "/home/pi/kx/pt2engine_vlm/models/InternVL3-1B_i8/InternVL3-1B_vis_engine/model.engine";
-    m_config.tokenizer_path = "/home/pi/.cache/huggingface/hub/models--OpenGVLab--InternVL3-1B/snapshots/4415a3b810e636d11dfa86b0e9ba40bb00535aa8/tokenizer.json";
+
+    m_config.llm_engine_path = model_path + "/InternVL3-1B_llm_engine";
+    m_config.vis_engine_path = model_path + "/InternVL3-1B_vis_engine/model.engine";
+    m_config.tokenizer_path = model_path + "/tokenizers/tokenizer.json";
 
     m_config.max_beam_width = 1;
     m_config.max_llm_batch = 2;
-    m_config.max_vis_batch = 3;
+    m_config.max_vis_batch = 6;
     m_config.patch_token_size = 256;
     m_config.embedding_dim = 896;
 
@@ -136,12 +143,14 @@ int main(int argc, char** argv) {
     print_gen_summary(gen_result_1);
 
 
-    inputText = "Can you describe the 2 images?";
-    imagePaths = {
-        "/home/pi/kx/sample_images/tiger.jpg",
-        "/home/pi/kx/sample_images/wolf.jpg"
-    };
+    // inputText = "Can you describe the 2 images?";
+    // imagePaths = {
+    //     "/home/pi/kx/sample_images/tiger.jpg",
+    //     "/home/pi/kx/sample_images/wolf.jpg"
+    // };
 
+
+    
     frames.clear();
     for (auto path : imagePaths){
         cv::Mat img = cv::imread(path);

@@ -66,9 +66,9 @@ namespace trt_multimodal {
     void InternVL3VisionEngine::extract_visual_features(
         const std::vector<cv::Mat>& images,
         const GenerateConfig& gen_config,
-        VisualFeatures& vis_feats
+        VisualFeatures& vis_feats,
+        const bool sync
     ) {
-
         vis_engine->context->setInputShape(
             "input", 
             nvinfer1::Dims4{
@@ -84,31 +84,30 @@ namespace trt_multimodal {
         size_t pixels_per_patch = 3 * gen_config.patch_size * gen_config.patch_size; // [3, 448, 448]
 
         std::vector<std::vector<cv::Rect>> all_patch_rects_on_src(images.size());
-        for (int img_idx = 0; img_idx < images.size(); ++img_idx) {
-
+        for (size_t img_idx = 0; img_idx < images.size(); ++img_idx) {
             const cv::Mat image = images[img_idx];
-
+            
             float aspect_ratio = (float)image.cols / image.rows;
             AspectRatio target_ratio = find_closest_aspect_ratio(
                 aspect_ratio, gen_config.min_patch, gen_config.max_patch, gen_config.patch_size);
 
             float sw = (float)image.cols / target_ratio.width;
             float sh = (float)image.rows / target_ratio.height;
-
+            
             int blocks = target_ratio.width * target_ratio.height;
             for (int i = 0; i < blocks; ++i) {
                 int ix = i % target_ratio.width;
                 int iy = i / target_ratio.width;
                 all_patch_rects_on_src[img_idx].push_back(cv::Rect(ix * sw, iy * sh, sw, sh));
             }
-
+            
             if (gen_config.use_thumbnail && blocks != 1) {
                 all_patch_rects_on_src[img_idx].push_back(cv::Rect(0, 0, image.cols, image.rows));
             }
-
+            
             vis_feats.image_patch_counts.push_back(all_patch_rects_on_src[img_idx].size());
         }
-
+        
         /**
         Before inferening in Vision Engine need to be in fp16
         Output of Vision Engine is fp16, before inferencing in LLM Engine need to be in bf16
@@ -158,7 +157,7 @@ namespace trt_multimodal {
 
         cudaFreeAsync(d_input_fp16, m_stream);
         cudaFreeAsync(d_output_fp16, m_stream);
-
+        
         // [Asynchronous Memory Management]
         // We capture a local copy of m_stream to avoid dependency on 'this' pointer.
         // This ensures that even if the VisionEngine is destroyed, the shared_ptr's 
@@ -170,28 +169,23 @@ namespace trt_multimodal {
                 cudaFreeAsync(ptr, stream_for_deleter);
             }
         });
-
         vis_feats.dtype = DataType::BF16;
 
-        cudaStreamSynchronize(m_stream);
+        if (sync) cudaStreamSynchronize(m_stream);
     }
 
-    SharedVisHandle InternVL3VisionEngine::enqueue_extract_visual_features(
+    void InternVL3VisionEngine::enqueue_extract_visual_features(
         const std::vector<cv::Mat>& images,
-        const GenerateConfig& gen_config
+        const GenerateConfig& gen_config,
+        SharedVisGenHandle& handle
     ) {
-
-        auto handle = std::make_shared<VisHandle>();
-
         extract_visual_features(
             images,
             gen_config,
-            handle->visual_features
+            handle->visual_features,
+            false
         );
-
-        handle->is_finished.store(true);
-        return handle;
-    
+        handle->vis_finished.store(true);
     }
 
 } // namespace trt_multimodal

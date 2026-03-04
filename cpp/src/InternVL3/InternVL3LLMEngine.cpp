@@ -180,9 +180,7 @@ void InternVL3LLMEngine::generate_from_features(
         std::string replacement = std::to_string(i + 1);
         
         size_t pos = prefix.find(placeholder);
-        if (pos != std::string::npos) {
-            prefix.replace(pos, placeholder.length(), replacement);
-        }
+        if (pos != std::string::npos) prefix.replace(pos, placeholder.length(), replacement);
         images_prefix.push_back(prefix);
         images_postfix.push_back(gen_config.image_postfix);
     }
@@ -194,7 +192,7 @@ void InternVL3LLMEngine::generate_from_features(
     std::vector<int32_t> pre_prompt_tokens = tokenizer->Encode(pre_prompt);
     for (auto tid : pre_prompt_tokens) input_ids.push_back(static_cast<int32_t>(tid));
 
-    for (int i = 0; i < vis_features.image_patch_counts.size(); ++i) {
+    for (int i = 0; i < vis_features.total_patches(); ++i) {
         std::vector<int32_t> pre_img_tokens = tokenizer->Encode(images_prefix[i]);
         for (auto tid : pre_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
 
@@ -268,13 +266,12 @@ void InternVL3LLMEngine::generate_from_features(
 
 }
 
-SharedGenHandle InternVL3LLMEngine::enqueue_generate_from_features(
+void InternVL3LLMEngine::enqueue_generate_from_features(
     const VisualFeatures& vis_features,
     const std::string& user_prompt,
-    const GenerateConfig& gen_config
+    const GenerateConfig& gen_config,
+    SharedVisGenHandle& handle
 ) {
-
-    auto handle = std::make_shared<GenHandle>();
 
     //Construct Input Prompts
     std::string pre_prompt = "<|im_start|>system\n" + gen_config.system_prompt + "<|im_end|>\n<|im_start|>user\n";
@@ -341,8 +338,6 @@ SharedGenHandle InternVL3LLMEngine::enqueue_generate_from_features(
     handle->generate_result.start_gen = std::chrono::high_resolution_clock::now();
     handle->generate_result.outputs_tokens.resize(m_config.max_beam_width);
     handle->generate_result.last_outputs_token.resize(m_config.max_beam_width);
-
-    return handle;
 
 }
 

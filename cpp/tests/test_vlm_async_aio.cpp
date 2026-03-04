@@ -114,7 +114,7 @@ int main(int argc, char** argv) {
     gen_config.streaming = true;
     gen_config.profiling = true;
 
-    int request_num = 2;
+    int request_num = 50;
 
     std::unique_ptr<trt_multimodal::IAsyncMultimodalRunner> runner = trt_multimodal::IAsyncMultimodalRunner::create(m_config);
 
@@ -127,42 +127,17 @@ int main(int argc, char** argv) {
         frames.push_back(std::move(rgbImg));
     }
 
-    std::vector<trt_multimodal::SharedVisGenHandle> vis_handles;
+    std::vector<trt_multimodal::SharedVisGenHandle> aio_handles;
     for (int i = 0; i < request_num; ++i) {
-        vis_handles.push_back(runner->enqueue_extract_visual_features(frames, gen_config));
-    }
-
-    // --- 阶段 2: 统一等待视觉提取完成 ---
-    // 只要还有一个没完成，就继续等
-    // 真正异步推理应该是只要 vis 结束就可以交给 LLM
-    bool all_vis_done = false;
-    while (!all_vis_done) {
-        all_vis_done = true;
-        for (auto& v_h : vis_handles) {
-            if (!v_h->vis_finished.load()) {
-                all_vis_done = false;
-                break;
-            }
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-
-    std::vector<trt_multimodal::SharedVisGenHandle> gen_handles;
-    for (int i = 0; i < request_num; ++i) {
-        gen_handles.push_back(runner->enqueue_generate_from_features(
-            vis_handles[i]->visual_features, inputText, gen_config));
+        aio_handles.push_back(runner->enqueue_generate(frames, inputText, gen_config));
     }
 
     while (true) {
         bool all_gen_done = true;
-        for (size_t i = 0; i < gen_handles.size(); ++i) {
-            auto& res = gen_handles[i]->generate_result;
+        for (size_t i = 0; i < aio_handles.size(); ++i) {
+            auto& res = aio_handles[i]->generate_result;
             if (!res.done_output.load()) {
                 all_gen_done = false;
-                if (!res.outputs_tokens.empty()) {
-                    std::cout << "Req [" << i << "] generating... tokens: " 
-                            << res.outputs_tokens[0].size() << std::endl;
-                }
             }
         }
         if (all_gen_done) break;
@@ -170,7 +145,7 @@ int main(int argc, char** argv) {
     }
 
     for (int i = 0; i < request_num; ++i) {
-        print_gen_summary(gen_handles[i]->generate_result);
+        print_gen_summary(aio_handles[i]->generate_result);
     }
 
     return 0;

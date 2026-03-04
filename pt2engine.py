@@ -13,7 +13,7 @@ import subprocess
 import tensorrt_llm
 import torch.nn as nn
 
-from transformers import AutoModel
+from transformers import AutoModel, AutoTokenizer
 from tensorrt_llm.mapping import Mapping
 from tensorrt_llm._utils import release_gc
 from huggingface_hub import snapshot_download
@@ -29,9 +29,9 @@ MODEL_CKPT_MAP = {
 }
 
 assert (MODEL_NAME := 'InternVL3-1B') in list(MODEL_CKPT_MAP.keys())
-NUM_FRAMES = 2
-LLM_BATCH_SIZE = 2
-VIS_BATCH_SIZE = 3 # if small enough, can do i in one run, NUM_FRAMES * LLM_BATCH_SIZE
+NUM_FRAMES = 6
+LLM_BATCH_SIZE = 20
+VIS_BATCH_SIZE = 6 # NUM_FRAMES # if small enough, can do i in one run, NUM_FRAMES * LLM_BATCH_SIZE
 MAX_MULTIMODAL_LEN = 256 * NUM_FRAMES * LLM_BATCH_SIZE # total image len (sum of whole batch)
 MAX_INPUT_LEN = 256 * NUM_FRAMES + 100 # input text length (for each batch)
 MAX_SEQ_LEN = MAX_INPUT_LEN + 500 # output text length (for each batch)
@@ -405,6 +405,7 @@ def main(args):
     ONNX_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/{args.model_name}_vis.onnx")
     VIS_ENGINE_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/{args.model_name}_vis_engine")
     LLM_ENGINE_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/{args.model_name}_llm_engine")
+    TKN_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/tokenizers")
 
     vis2onnx_build = {'skip': False, 'peak_rss_gb': 0, 'peak_vms_gb': 0, 'elapsed_time': 0}
     vis2engine_build = {'skip': False, 'peak_rss_gb': 0, 'peak_vms_gb': 0, 'elapsed_time': 0}
@@ -728,6 +729,11 @@ def main(args):
         #     shutil.rmtree(tmp_converted_dir)
         #     if os.path.exists('model.cache'):
         #         os.remove('model.cache')
+
+    # Tokenizers
+    model_dir = snapshot_download(repo_id=MODEL_CKPT_PATH)
+    tokenizer = AutoTokenizer.from_pretrained(model_dir, fix_mistral_regex=True)
+    tokenizer.save_pretrained(TKN_PATH)
 
     overview(vis2onnx_build, vis2engine_build, llm2engine_build)
 

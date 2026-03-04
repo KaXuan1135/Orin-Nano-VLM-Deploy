@@ -184,20 +184,18 @@ struct GenerateResult {
 };
 
 //Asynchronous
-struct GenHandle {
-    std::atomic<bool> is_finished{false};
+struct VisGenHandle {
+    std::atomic<bool> vis_finished{false};
+    std::atomic<bool> gen_finished{false};
+
+    std::atomic<bool> do_vis{false};
+    std::atomic<bool> do_llm{false};
+
+    VisualFeatures visual_features;
     GenerateResult generate_result;
 
-    // 使用 mutex 保护，因为 Runner 在写，RabbitMQ/Main 在读
     mutable std::mutex data_mutex;
 };
-
-struct VisHandle {
-    std::atomic<bool> is_finished{false};
-    VisualFeatures visual_features;
-};
-
-using SharedGenHandle = std::shared_ptr<GenHandle>;
-using SharedVisHandle = std::shared_ptr<VisHandle>;
+using SharedVisGenHandle = std::shared_ptr<VisGenHandle>;
 
 } // namespace trt_multimodal

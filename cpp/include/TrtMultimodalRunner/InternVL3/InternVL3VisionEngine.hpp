@@ -17,12 +17,14 @@ public:
     void extract_visual_features(
         const std::vector<cv::Mat>& images,
         const GenerateConfig& gen_config,
-        VisualFeatures& vis_feats
+        VisualFeatures& vis_feats,
+        const bool sync = false
     );
 
-    SharedVisHandle enqueue_extract_visual_features(
+    void enqueue_extract_visual_features(
         const std::vector<cv::Mat>& images,
-        const GenerateConfig& gen_config
+        const GenerateConfig& gen_config,
+        SharedVisGenHandle& handle
     );
 
 private:

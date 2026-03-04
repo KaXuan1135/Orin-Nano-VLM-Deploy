@@ -21,18 +21,18 @@ public:
 
     ~AsyncInternVL3Runner() override;
 
-    SharedGenHandle enqueue_generate(
+    SharedVisGenHandle enqueue_generate(
         const std::vector<cv::Mat>& images, 
         const std::string& user_prompt,
         const GenerateConfig& gen_config
     ) override;
 
-    SharedVisHandle enqueue_extract_visual_features(
+    SharedVisGenHandle enqueue_extract_visual_features(
         const std::vector<cv::Mat>& images,
         const GenerateConfig& gen_config
     ) override;
 
-    SharedGenHandle enqueue_generate_from_features(
+    SharedVisGenHandle enqueue_generate_from_features(
         const VisualFeatures& visual_features,
         const std::string& user_prompt,
         const GenerateConfig& gen_config
@@ -42,15 +42,16 @@ private:
 
     InternVL3Runner m_sync_runner;
     std::thread m_worker;
+
     std::atomic<bool> m_stop;
     std::condition_variable m_cv;
 
     uint64_t vis_rid = 0;
     mutable std::mutex m_map_mutex;
-    std::unordered_map<uint64_t, SharedVisHandle> m_inflight_vis_tasks;
-    std::unordered_map<uint64_t, SharedGenHandle> m_inflight_llm_tasks;
+    std::unordered_map<uint64_t, SharedVisGenHandle> m_inflight_vis_tasks;
+    std::unordered_map<uint64_t, SharedVisGenHandle> m_inflight_llm_tasks;
 
-    void generate_listener_loop();
+    void worker_loop();
 
 };
 

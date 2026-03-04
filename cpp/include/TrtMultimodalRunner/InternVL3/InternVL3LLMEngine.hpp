@@ -22,10 +22,11 @@ public:
         GenerateResult& gen_result
     );
 
-    SharedGenHandle enqueue_generate_from_features(
+    void enqueue_generate_from_features(
         const VisualFeatures& visual_features,
         const std::string& user_prompt,
-        const GenerateConfig& generate_config
+        const GenerateConfig& generate_config,
+        SharedVisGenHandle& handle
     );
 
     void update_response(
