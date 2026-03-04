@@ -25,7 +25,6 @@ public:
         const GenerateConfig& gen_config
     );
 
-    
 private:
 
     struct VisionSession {
@@ -62,7 +61,6 @@ private:
     } gLogger;
     
     AspectRatio find_closest_aspect_ratio(float aspect_ratio, int min_num, int max_num, int image_size);
-    std::vector<cv::Mat> dynamic_preprocess(const cv::Mat& image, int min_num, int max_num, int image_size, bool use_thumbnail);
 };
 
 } // namespace trt_multimodal
