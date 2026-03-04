@@ -87,7 +87,7 @@ int main(int argc, char** argv) {
 
     m_config.max_beam_width = 1;
     m_config.max_llm_batch = 2;
-    m_config.max_vis_batch = 2;
+    m_config.max_vis_batch = 3;
     m_config.patch_token_size = 256;
     m_config.embedding_dim = 896;
 

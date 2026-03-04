@@ -3,7 +3,6 @@
 #include <opencv2/opencv.hpp>
 #include <cuda_runtime.h>
 #include <cuda_bf16.h>
-#include <cuda_fp16.h>
 
 #include "TrtMultimodalRunner/InternVL3/vision_utils.h"
 #include "TrtMultimodalRunner/InternVL3/InternVL3VisionEngine.hpp"
@@ -11,28 +10,6 @@
 using namespace nvinfer1;
 
 namespace trt_multimodal {
-
-    std::vector<float> transform_to_fp32_chw(const cv::Mat& patch) {
-        cv::Mat float_img;
-        patch.convertTo(float_img, CV_32FC3, 1.0 / 255.0); // ToTensor (0-1)
-
-        // Normalize (ImageNet)
-        cv::Scalar mean(0.485, 0.456, 0.406);
-        cv::Scalar std(0.229, 0.224, 0.225);
-        cv::subtract(float_img, mean, float_img);
-        cv::divide(float_img, std, float_img);
-
-        // HWC -> CHW (3, 448, 448)
-        int area = patch.rows * patch.cols;
-        std::vector<float> output(area * 3);
-        std::vector<cv::Mat> channels(3);
-        cv::split(float_img, channels);
-
-        for (int i = 0; i < 3; ++i) {
-            std::memcpy(output.data() + i * area, channels[i].data, area * sizeof(float));
-        }
-        return output;
-    }
 
     int InternVL3VisionEngine::init(
         const ModelConfig& config,
@@ -57,6 +34,28 @@ namespace trt_multimodal {
         vis_engine->context = vis_engine->engine->createExecutionContext();
 
         return 0;
+    }
+
+    std::vector<float> transform_to_fp32_chw(const cv::Mat& patch) {
+        cv::Mat float_img;
+        patch.convertTo(float_img, CV_32FC3, 1.0 / 255.0); // ToTensor (0-1)
+
+        // Normalize (ImageNet)
+        cv::Scalar mean(0.485, 0.456, 0.406);
+        cv::Scalar std(0.229, 0.224, 0.225);
+        cv::subtract(float_img, mean, float_img);
+        cv::divide(float_img, std, float_img);
+
+        // HWC -> CHW (3, 448, 448)
+        int area = patch.rows * patch.cols;
+        std::vector<float> output(area * 3);
+        std::vector<cv::Mat> channels(3);
+        cv::split(float_img, channels);
+
+        for (int i = 0; i < 3; ++i) {
+            std::memcpy(output.data() + i * area, channels[i].data, area * sizeof(float));
+        }
+        return output;
     }
 
     AspectRatio InternVL3VisionEngine::find_closest_aspect_ratio(float aspect_ratio, int min_num, int max_num, int image_size) {
@@ -123,7 +122,7 @@ namespace trt_multimodal {
         VisualFeatures& vis_feats
     ) {
 
-        std::vector<float> patches_overall;
+        std::vector<float> patches_overall; // [total_patches, 3, 448, 448]
         // CPU Preprocess TODO: preprocess on cuda
         for (const cv::Mat& image : images) {
             std::vector<cv::Mat> patches = dynamic_preprocess(
@@ -142,10 +141,9 @@ namespace trt_multimodal {
             vis_feats.image_patch_counts.push_back(patches.size());
         }
 
-        std::vector<void*> embedding_ptr;
-
-        // 目前假定可以一批次解决所有图片，即 m_config.max_vis_batch == 传进来的图片数量
-        // for (size_t spilt = 0; spilt < vis_feats.total_patches() / m_config.max_vis_batch; ++spilt) {
+        size_t tokens_per_patch = m_config.patch_token_size * m_config.embedding_dim; // [256, 896]
+        size_t max_out_elements = m_config.max_vis_batch * tokens_per_patch; // [max_vis_batch, 256, 896]
+        size_t pixels_per_patch = 3 * gen_config.patch_size * gen_config.patch_size; // [3, 448, 448]
 
         vis_engine->context->setInputShape(
             "input", 
@@ -157,26 +155,40 @@ namespace trt_multimodal {
             }
         );
 
-        void *d_input = nullptr, *d_output_fp16 = nullptr, *d_output_bf16 = nullptr;
-        size_t out_elements = m_config.max_vis_batch * m_config.patch_token_size * m_config.embedding_dim;
+        /**
+        Preprocessed image in fp32, before inferening in Vision Engine need to be in fp16
+        Output of Vision Engine is fp16, before inferencing in LLM Engine need to be in bf16
+        */
+        void *d_input_fp32 = nullptr, *d_input_fp16 = nullptr, *d_output_fp16 = nullptr, *d_all_outputs_bf16 = nullptr;
+        cudaMallocAsync(&d_input_fp32, m_config.max_vis_batch * pixels_per_patch * sizeof(float), m_stream);
+        cudaMallocAsync(&d_input_fp16, m_config.max_vis_batch * 3 * gen_config.patch_size * gen_config.patch_size * sizeof(__half), m_stream);
+        cudaMallocAsync(&d_output_fp16, max_out_elements * sizeof(uint16_t), m_stream);
+        cudaMallocAsync(&d_all_outputs_bf16, vis_feats.total_patches() * tokens_per_patch * sizeof(uint16_t), m_stream);
 
-        cudaMalloc(&d_input, m_config.max_vis_batch * 3 * gen_config.patch_size * gen_config.patch_size * sizeof(__half));
-        cudaMalloc(&d_output_fp16, out_elements * sizeof(uint16_t));
-        cudaMalloc(&d_output_bf16, out_elements * sizeof(uint16_t));
+        for (size_t i = 0; i < vis_feats.total_patches(); i += m_config.max_vis_batch) {
 
-        std::vector<__half> host_input_half;
-        for (float f : patches_overall) host_input_half.push_back(__float2half(f));
-        cudaMemcpy(d_input, host_input_half.data(), host_input_half.size() * sizeof(__half), cudaMemcpyHostToDevice);
+            size_t cur_batch_size = std::min(static_cast<size_t>(m_config.max_vis_batch), vis_feats.total_patches() - i);
+            size_t cur_out_elements = cur_batch_size * tokens_per_patch;
 
-        vis_engine->context->setTensorAddress("input", d_input);
-        vis_engine->context->setTensorAddress("output", d_output_fp16);
-        vis_engine->context->enqueueV3(m_stream);
-        
-        cudaStreamSynchronize(m_stream); //Neccessary?
-        launch_fp16_to_bf16(d_output_fp16, d_output_bf16, out_elements, m_stream);
-        embedding_ptr.push_back(d_output_bf16);
+            void* d_current_output_offset = (uint16_t*)d_all_outputs_bf16 + (i * tokens_per_patch);
 
-        // } for loops end here
+            float* current_patch_ptr = patches_overall.data() + (i * pixels_per_patch);
+            size_t cur_in_elements = cur_batch_size * pixels_per_patch;
+
+            cudaMemcpyAsync(d_input_fp32, current_patch_ptr, cur_in_elements * sizeof(float), cudaMemcpyHostToDevice, m_stream);
+            launch_fp32_to_fp16(d_input_fp32, d_input_fp16, cur_in_elements, m_stream);
+
+            vis_engine->context->setTensorAddress("input", d_input_fp16);
+            vis_engine->context->setTensorAddress("output", d_output_fp16);
+            vis_engine->context->enqueueV3(m_stream);
+
+            launch_fp16_to_bf16(d_output_fp16, d_current_output_offset, cur_out_elements, m_stream);
+        }
+
+        cudaFreeAsync(d_input_fp32, m_stream);
+        cudaFreeAsync(d_input_fp16, m_stream);
+        cudaFreeAsync(d_output_fp16, m_stream);
+        cudaStreamSynchronize(m_stream);
 
         // [Asynchronous Memory Management]
         // We capture a local copy of m_stream to avoid dependency on 'this' pointer.
@@ -184,7 +196,7 @@ namespace trt_multimodal {
         // custom deleter can safely release the GPU memory via cudaFreeAsync 
         // without accessing a dangling 'this' pointer.
         cudaStream_t stream_for_deleter = m_stream;
-        vis_feats.embeddings_ptr = std::shared_ptr<void>(d_output_bf16, [stream_for_deleter](void* ptr) {
+        vis_feats.embeddings_ptr = std::shared_ptr<void>(d_all_outputs_bf16, [stream_for_deleter](void* ptr) {
             if (ptr) {
                 cudaFreeAsync(ptr, stream_for_deleter);
             }

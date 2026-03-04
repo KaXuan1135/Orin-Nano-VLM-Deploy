@@ -31,7 +31,7 @@ MODEL_CKPT_MAP = {
 assert (MODEL_NAME := 'InternVL3-1B') in list(MODEL_CKPT_MAP.keys())
 NUM_FRAMES = 2
 LLM_BATCH_SIZE = 2
-VIS_BATCH_SIZE = NUM_FRAMES # if small enough, can do i in one run, NUM_FRAMES * LLM_BATCH_SIZE
+VIS_BATCH_SIZE = 3 # if small enough, can do i in one run, NUM_FRAMES * LLM_BATCH_SIZE
 MAX_MULTIMODAL_LEN = 256 * NUM_FRAMES * LLM_BATCH_SIZE # total image len (sum of whole batch)
 MAX_INPUT_LEN = 256 * NUM_FRAMES + 100 # input text length (for each batch)
 MAX_SEQ_LEN = MAX_INPUT_LEN + 500 # output text length (for each batch)
@@ -381,7 +381,7 @@ def parse_arguments():
 
 def main(args):
 
-    assert (args.num_frames * args.llm_batch_size) % args.vis_batch_size == 0
+    # assert (args.num_frames * args.llm_batch_size) % args.vis_batch_size == 0
     assert args.max_multimodal_len == 256 * args.num_frames * args.llm_batch_size
     assert 256 * args.num_frames < args.max_input_len
     assert args.max_input_len < args.max_seq_len
