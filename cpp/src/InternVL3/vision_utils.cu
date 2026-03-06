@@ -39,10 +39,7 @@ extern "C" void launch_fp32_to_fp16(const void* input, void* output, size_t n, c
     );
 }
 
-
-
-
-// 预处理内核：完成 Resize + Normalize + HWC2CHW + TypeCast
+// 完成 Resize + Normalize + HWC2CHW + TypeCast
 __global__ void vlm_preprocess_bilinear_kernel(
     const uint8_t* src, __half* dest,
     int src_w, int src_h, int patch_size,
@@ -54,11 +51,11 @@ __global__ void vlm_preprocess_bilinear_kernel(
     int dy = blockIdx.y * blockDim.y + threadIdx.y;
 
     if (dx < patch_size && dy < patch_size) {
-        // 1. 计算目标像素对应原图的浮点坐标
+        // 计算目标像素对应原图的浮点坐标
         float sx = (float)dx * crop_w / patch_size + crop_x;
         float sy = (float)dy * crop_h / patch_size + crop_y;
 
-        // 2. 找到周围的 4 个像素坐标
+        // 找到周围的 4 个像素坐标
         int x0 = (int)floorf(sx);
         int y0 = (int)floorf(sy);
         int x1 = min(x0 + 1, src_w - 1);
@@ -68,7 +65,7 @@ __global__ void vlm_preprocess_bilinear_kernel(
         float u = sx - x0;
         float v = sy - y0;
 
-        // 3. 读取 4 个点的 RGB 并进行线性插值
+        // 读取 4 个点的 RGB 并进行线性插值
         auto get_pixel = [&](int x, int y, int c) {
             return (float)src[(y * src_w + x) * 3 + c];
         };
@@ -84,13 +81,13 @@ __global__ void vlm_preprocess_bilinear_kernel(
             float val = (1 - u) * (1 - v) * p00 + u * (1 - v) * p10 +
                         (1 - u) * v * p01 + u * v * p11;
             
-            // 4. 归一化 (Normalize)
+            // Normalize
             if (c == 0) channels[0] = (val / 255.0f - mean_r) / std_r;
             else if (c == 1) channels[1] = (val / 255.0f - mean_g) / std_g;
             else channels[2] = (val / 255.0f - mean_b) / std_b;
         }
 
-        // 5. 存储为 CHW 布局 (FP16)
+        // HWC2CHW + TypeCast(fp32->fp16)
         int plane_size = patch_size * patch_size;
         int dest_idx = dy * patch_size + dx;
         dest[0 * plane_size + dest_idx] = __float2half(channels[0]);

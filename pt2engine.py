@@ -33,8 +33,8 @@ NUM_FRAMES = 6
 LLM_BATCH_SIZE = 20
 VIS_BATCH_SIZE = 6 # NUM_FRAMES # if small enough, can do i in one run, NUM_FRAMES * LLM_BATCH_SIZE
 MAX_MULTIMODAL_LEN = 256 * NUM_FRAMES * LLM_BATCH_SIZE # total image len (sum of whole batch)
-MAX_INPUT_LEN = 256 * NUM_FRAMES + 100 # input text length (for each batch)
-MAX_SEQ_LEN = MAX_INPUT_LEN + 500 # output text length (for each batch)
+MAX_INPUT_LEN = 256 * NUM_FRAMES + 5000 # input text length (for each batch)
+MAX_SEQ_LEN = MAX_INPUT_LEN + 100 # output text length (for each batch)
 
 PP_SIZE = 1
 WORKERS = 1
