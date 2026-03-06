@@ -47,8 +47,10 @@ private:
     std::condition_variable m_cv;
 
     mutable std::mutex m_map_mutex;
-    uint64_t vis_rid = 0;
-    uint64_t llm_rid = 0;
+    mutable std::mutex m_vis_queue_mutex;
+    mutable std::mutex m_llm_queue_mutex;
+    std::atomic<uint64_t> vis_rid{0};
+    std::atomic<uint64_t> llm_rid{0};
     size_t max_inflight_vis = 5;  // TODO, move to arguments
     size_t max_inflight_llm = 20; // TODO, move to arguments
     std::deque<SharedVisGenHandle> m_queue_vis_tasks;
