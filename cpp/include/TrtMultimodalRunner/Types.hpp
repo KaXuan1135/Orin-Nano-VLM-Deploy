@@ -89,7 +89,8 @@ struct GenerateConfig {
 
 struct VisualFeatures {
 
-    std::uint64_t request_id;
+    GenerateConfig gen_config;
+    std::vector<cv::Mat> images;
 
     std::shared_ptr<void> embeddings_ptr;
     std::vector<int32_t> image_patch_counts;
@@ -251,6 +252,10 @@ struct GenerateResult {
 
 //Asynchronous
 struct VisGenHandle {
+
+    std::uint64_t vis_task_id;
+    std::uint64_t llm_task_id;
+
     std::atomic<bool> vis_finished{false};
     std::atomic<bool> gen_finished{false};
 

@@ -28,6 +28,7 @@ SharedVisGenHandle AsyncInternVL3Runner::enqueue_generate(
     const GenerateConfig& gen_config) 
 {
     SharedVisGenHandle handle = enqueue_extract_visual_features(images, gen_config);
+    handle->llm_task_id = llm_rid++;
     handle->do_llm.store(true);
     handle->generate_result.gen_config = gen_config;
     handle->generate_result.user_prompt = user_prompt;
@@ -39,11 +40,12 @@ SharedVisGenHandle AsyncInternVL3Runner::enqueue_extract_visual_features(
     const GenerateConfig& gen_config
 ) {
     SharedVisGenHandle handle = std::make_shared<VisGenHandle>();
-    m_sync_runner.vis_engine.enqueue_extract_visual_features(images, gen_config, handle);
-    // runner create the id for vision task, it is not like llm executor has its own request id
-    handle->visual_features.request_id = vis_rid++;
+    handle->visual_features.images = images;
+    handle->visual_features.gen_config = gen_config;
+    handle->vis_task_id = vis_rid++;
     handle->do_vis.store(true);
-    m_inflight_vis_tasks[handle->visual_features.request_id] = handle;
+    std::lock_guard<std::mutex> lock(m_map_mutex);
+    m_queue_vis_tasks.push_back(std::move(handle));
     return handle;
 }
 
@@ -53,9 +55,13 @@ SharedVisGenHandle AsyncInternVL3Runner::enqueue_generate_from_features(
     const GenerateConfig& gen_config
 ) {
     SharedVisGenHandle handle = std::make_shared<VisGenHandle>();
-    m_sync_runner.llm_engine.enqueue_generate_from_features(vis_features, user_prompt, gen_config, handle);
+    handle->llm_task_id = llm_rid++;
     handle->do_llm.store(true);
-    m_inflight_llm_tasks[handle->generate_result.request_id] = handle;
+    handle->generate_result.gen_config = gen_config;
+    handle->generate_result.user_prompt = user_prompt;
+    std::lock_guard<std::mutex> lock(m_map_mutex);
+    m_queue_llm_tasks.push_back(std::move(handle));
+    // m_sync_runner.llm_engine.enqueue_generate_from_features(vis_features, user_prompt, gen_config, handle);
     return handle;
 }
 
@@ -70,15 +76,28 @@ void AsyncInternVL3Runner::worker_loop(
                 continue;
             }
 
+            // Vision : Queue -> Process
+            if ((m_inflight_vis_tasks.size() < max_inflight_vis) && m_queue_vis_tasks.size() > 0) {
+                SharedVisGenHandle handle = std::move(m_queue_vis_tasks.front());
+                m_queue_vis_tasks.pop_front();
+
+                m_inflight_vis_tasks[handle->vis_task_id] = handle;
+                m_sync_runner.vis_engine.enqueue_extract_visual_features(
+                    handle->visual_features.images, 
+                    handle->visual_features.gen_config, 
+                    handle);
+            }
+
             // See which vision has done, and if it need to auto do llm
             for (auto it = m_inflight_vis_tasks.begin(); it != m_inflight_vis_tasks.end(); ) {
                 auto& handle = it->second;
                 
                 if (handle->vis_finished.load()) {
                     if (handle->do_llm.load()) {
-                        std::cout << "Task " << handle->visual_features.request_id << " moved to LLM" << std::endl;
-                        m_sync_runner.llm_engine.enqueue_generate_from_features(handle->visual_features, handle->generate_result.user_prompt, handle->generate_result.gen_config, handle);
-                        m_inflight_llm_tasks[handle->generate_result.request_id] = handle;
+                        std::cout << "Task " << handle->vis_task_id << " / " << handle->llm_task_id << " moved to LLM" << std::endl;
+                        m_queue_llm_tasks.push_back(std::move(handle));
+                        // m_sync_runner.llm_engine.enqueue_generate_from_features(handle->visual_features, handle->generate_result.user_prompt, handle->generate_result.gen_config, handle);
+                        // m_inflight_llm_tasks[handle->generate_result.request_id] = handle;
                     }
                     it = m_inflight_vis_tasks.erase(it);
                 } else {
@@ -86,6 +105,20 @@ void AsyncInternVL3Runner::worker_loop(
                 }
             }
 
+            // LLM : Queue -> Process
+            if ((m_inflight_llm_tasks.size() < max_inflight_llm) && m_queue_llm_tasks.size() > 0) {
+                SharedVisGenHandle handle = std::move(m_queue_llm_tasks.front());
+                m_queue_llm_tasks.pop_front();
+
+                m_inflight_llm_tasks[handle->llm_task_id] = handle;
+                m_sync_runner.llm_engine.enqueue_generate_from_features(
+                    handle->visual_features, 
+                    handle->generate_result.user_prompt, 
+                    handle->generate_result.gen_config, 
+                handle);
+            }
+
+            // LLM : Process
             for (auto& [rid, handle] : m_inflight_llm_tasks) {
                 gen_results.push_back(&(handle->generate_result));
             }

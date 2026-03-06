@@ -46,8 +46,13 @@ private:
     std::atomic<bool> m_stop;
     std::condition_variable m_cv;
 
-    uint64_t vis_rid = 0;
     mutable std::mutex m_map_mutex;
+    uint64_t vis_rid = 0;
+    uint64_t llm_rid = 0;
+    size_t max_inflight_vis = 5;  // TODO, move to arguments
+    size_t max_inflight_llm = 20; // TODO, move to arguments
+    std::deque<SharedVisGenHandle> m_queue_vis_tasks;
+    std::deque<SharedVisGenHandle> m_queue_llm_tasks;
     std::unordered_map<uint64_t, SharedVisGenHandle> m_inflight_vis_tasks;
     std::unordered_map<uint64_t, SharedVisGenHandle> m_inflight_llm_tasks;
 

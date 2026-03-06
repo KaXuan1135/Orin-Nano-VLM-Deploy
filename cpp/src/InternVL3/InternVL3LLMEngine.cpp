@@ -80,7 +80,7 @@ TokenizerMetadata get_tokenizer_ids(const std::string& path) {
     json data = json::parse(f);
     TokenizerMetadata meta;
 
-    // 优先从 added_tokens 找 (这些通常具有最高优先级)
+    // 优先从 added_tokens 找
     if (data.contains("added_tokens")) {
         for (auto& t : data["added_tokens"]) {
             std::string content = t["content"];
@@ -138,7 +138,6 @@ std::string strip(const std::string& s) {
 }
 
 std::vector<std::string> InternVL3LLMEngine::decode_outputs(
-    // const std::vector<int32_t>& flat_beams_tokens, // 扁平化的 ids
     const std::vector<std::vector<int32_t>> beams_tokens,
     size_t input_len
 ) {
