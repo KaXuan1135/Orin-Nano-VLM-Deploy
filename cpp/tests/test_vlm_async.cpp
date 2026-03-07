@@ -114,7 +114,7 @@ int main(int argc, char** argv) {
     gen_config.streaming = true;
     gen_config.profiling = true;
 
-    int request_num = 2;
+    int request_num = 1;
 
     std::unique_ptr<trt_multimodal::IAsyncMultimodalRunner> runner = trt_multimodal::IAsyncMultimodalRunner::create(m_config);
 
@@ -146,6 +146,8 @@ int main(int argc, char** argv) {
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
+
+    std::cout << "done" << std::endl;
 
     std::vector<trt_multimodal::SharedVisGenHandle> gen_handles;
     for (int i = 0; i < request_num; ++i) {

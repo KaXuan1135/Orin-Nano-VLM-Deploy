@@ -114,6 +114,8 @@ int main(int argc, char** argv) {
     gen_config.streaming = true;
     gen_config.profiling = true;
 
+    int request_num = 20;
+
     std::unique_ptr<trt_multimodal::IMultimodalRunner> runner = trt_multimodal::IMultimodalRunner::create(m_config);
 
     std::vector<cv::Mat> frames;
@@ -125,22 +127,90 @@ int main(int argc, char** argv) {
         frames.push_back(std::move(rgbImg));
     }
 
-    trt_multimodal::VisualFeatures vis_feats;
-    runner->extract_visual_features(
-        frames,
-        gen_config,
-        vis_feats
-    );
+    std::vector<trt_multimodal::VisualFeatures> vis_featss(request_num);
+    std::vector<trt_multimodal::GenerateResult> gen_results(request_num);
 
-    trt_multimodal::GenerateResult gen_result_1;
-    runner->generate_from_features(
-        vis_feats,
-        inputText,
-        gen_config,
-        gen_result_1
-    );
+    for (int req = 0; req < request_num; ++req) {
+        // trt_multimodal::VisualFeatures vis_feats;
+        runner->extract_visual_features(
+            frames,
+            gen_config,
+            vis_featss[req]
+        );
+    }
 
-    print_gen_summary(gen_result_1);
+    auto all_gen_start = std::chrono::high_resolution_clock::now();
+
+    for (int req = 0; req < request_num; ++req) {
+        // trt_multimodal::GenerateResult gen_result;
+        runner->generate_from_features(
+            vis_featss[req],
+            inputText,
+            gen_config,
+            gen_results[req]
+        );
+        // gen_results[req] = gen_result;
+    }
+
+    auto all_gen_end = std::chrono::high_resolution_clock::now();
+
+    double total_elapsed_ms = std::chrono::duration<double, std::milli>(all_gen_end - all_gen_start).count();
+
+    double total_tokens_generated = 0;
+    double total_ttft_ms = 0;
+    int valid_ttft_count = 0;
+
+    for (int i = 0; i < request_num; ++i) {
+        auto& res = gen_results[i];
+        
+        // 累加生成的 token 数量 (假设只取 beam 0)
+        auto lens = res.outputs_tokens_len();
+        if (!lens.empty()) {
+            total_tokens_generated += lens[0];
+        }
+        
+        // 累加 TTFT
+        double ttft = res.time_to_first_token_ms();
+        if (ttft > 0) {
+            total_ttft_ms += ttft;
+            valid_ttft_count++;
+        }
+    }
+
+    double overall_tokens_per_second = (total_tokens_generated / total_elapsed_ms) * 1000.0;
+    double avg_output_tokens = total_tokens_generated / request_num;
+    double avg_ttft = (valid_ttft_count > 0) ? (total_ttft_ms / valid_ttft_count) : 0.0;
+
+    std::cout << "\n" << std::string(40, '=') << std::endl;
+    std::cout << "Performance Summary" << std::endl;
+    std::cout << std::string(40, '-') << std::endl;
+    std::cout << std::fixed << std::setprecision(2);
+    std::cout << "Total Elapsed Time    : " << total_elapsed_ms << " ms" << std::endl;
+    std::cout << "Overall Throughput    : " << overall_tokens_per_second << " tokens/s" << std::endl;
+    std::cout << "Avg Output Tokens/Req : " << avg_output_tokens << " tokens" << std::endl;
+    std::cout << "Average TTFT          : " << avg_ttft << " ms" << std::endl;
+    std::cout << std::string(40, '=') << std::endl;
+
+
+
+
+    
+    //  vis_feats;
+    // runner->extract_visual_features(
+    //     frames,
+    //     gen_config,
+    //     vis_feats
+    // );
+
+    // trt_multimodal::GenerateResult gen_result_1;
+    // runner->generate_from_features(
+    //     vis_feats,
+    //     inputText,
+    //     gen_config,
+    //     gen_result_1
+    // );
+
+    // print_gen_summary(gen_result_1);
 
 
     // inputText = "Can you describe the 2 images?";
@@ -151,24 +221,24 @@ int main(int argc, char** argv) {
 
 
     
-    frames.clear();
-    for (auto path : imagePaths){
-        cv::Mat img = cv::imread(path);
-        cv::Mat rgbImg;
-        cv::cvtColor(img, rgbImg, cv::COLOR_BGR2RGB);
+    // frames.clear();
+    // for (auto path : imagePaths){
+    //     cv::Mat img = cv::imread(path);
+    //     cv::Mat rgbImg;
+    //     cv::cvtColor(img, rgbImg, cv::COLOR_BGR2RGB);
 
-        frames.push_back(std::move(rgbImg));
-    }
+    //     frames.push_back(std::move(rgbImg));
+    // }
 
-    trt_multimodal::GenerateResult gen_result_2;
-    runner->generate(
-        frames,
-        inputText,
-        gen_config,
-        gen_result_2
-    );
+    // trt_multimodal::GenerateResult gen_result_2;
+    // runner->generate(
+    //     frames,
+    //     inputText,
+    //     gen_config,
+    //     gen_result_2
+    // );
 
-    print_gen_summary(gen_result_2);
+    // print_gen_summary(gen_result_2);
 
     return 0;
 }
