@@ -33,7 +33,7 @@ NUM_FRAMES = 6
 LLM_BATCH_SIZE = 20
 VIS_BATCH_SIZE = 6 # NUM_FRAMES # if small enough, can do i in one run, NUM_FRAMES * LLM_BATCH_SIZE
 MAX_MULTIMODAL_LEN = 256 * NUM_FRAMES * LLM_BATCH_SIZE # total image len (sum of whole batch)
-MAX_INPUT_LEN = 256 * NUM_FRAMES + 100 # input text length (for each batch)
+MAX_INPUT_LEN = 256 * NUM_FRAMES + 200 # input text length (for each batch)
 MAX_SEQ_LEN = MAX_INPUT_LEN + 500 # output text length (for each batch)
 
 PP_SIZE = 1
@@ -47,7 +47,7 @@ assert (MOE_PLUGIN := 'disable') in ['auto', 'float16', 'float32', 'bfloat16' , 
 assert (PAGED_KV_CACHE := 'enable') in ['enable', 'disable']
 assert (MAMBA_CONV1D_PLUGIN := 'disable') in ['auto', 'float16', 'float32', 'bfloat16', 'int32', 'disable']
 assert (GPT_ATTENTION_PLUGIN := 'auto') in ['auto', 'float16', 'float32', 'bfloat16', 'int32', 'disable']
-assert (REMOVE_INPUT_PADDING := 'enable') in ['enable', 'disable'] # reduddant in batch size == 1 scenario
+assert (REMOVE_INPUT_PADDING := 'disable') in ['enable', 'disable'] # reduddant in batch size == 1 scenario
 
 def monitor_memory(proc, results):
     """Monitors the memory usage of a process and all its children."""

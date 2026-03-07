@@ -10,8 +10,8 @@ from tensorrt_llm.runtime import InternVLRunner
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--max_new_tokens', type=int, default=500)
-    parser.add_argument('--batch_size', type=int, default=2)
+    parser.add_argument('--max_new_tokens', type=int, default=150)
+    parser.add_argument('--batch_size', type=int, default=20)
     parser.add_argument('--log_level', type=str, default='info')
     parser.add_argument('--visual_engine_dir',
                         type=str,
@@ -122,23 +122,15 @@ if __name__ == '__main__':
     image_paths = [
         ['/home/pi/kx/sample_images/cat.jpg', 
         '/home/pi/kx/sample_images/tiger.jpg',
-        # '/home/pi/kx/sample_images/apple.jpg',
-        # '/home/pi/kx/sample_images/orange.jpg',
-        # '/home/pi/kx/sample_images/airplane.jpg',
-        # '/home/pi/kx/sample_images/car.jpg'
-        ],
-        ['/home/pi/kx/sample_images/dog.jpg', 
-        '/home/pi/kx/sample_images/wolf.jpg',
-        # '/home/pi/kx/sample_images/apple.jpg',
-        # '/home/pi/kx/sample_images/orange.jpg',
-        # '/home/pi/kx/sample_images/airplane.jpg',
-        # '/home/pi/kx/sample_images/car.jpg'
-        ],
+        '/home/pi/kx/sample_images/apple.jpg',
+        '/home/pi/kx/sample_images/orange.jpg',
+        '/home/pi/kx/sample_images/airplane.jpg',
+        '/home/pi/kx/sample_images/car.jpg'
+        ] for _ in range(args.batch_size)
     ]
 
     input_text = [
-        'Describe the images.',
-        'Please describe the images.',
+        "Can you describe the 6 images?" for _ in range(args.batch_size)
     ]
 
     num_iters = args.profiling_iterations if args.run_profiling else 1
