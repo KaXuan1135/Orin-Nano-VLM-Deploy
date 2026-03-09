@@ -96,11 +96,9 @@ void AsyncInternVL3Runner::worker_loop(
 
         for (size_t i = 0; i < gen_results.size(); ++i) {
             auto& res = gen_results[i];
-            if (!res->done_output.load()) {
-                if (!res->outputs_tokens.empty()) {
-                    std::cout << "Req [" << res->request_id << "] generating... tokens: " 
-                            << res->outputs_tokens[0].size() << std::endl;
-                }
+            if (!res->outputs_tokens.empty()) {
+                std::cout << "Req [" << res->request_id << "] generating... tokens: " 
+                        << res->outputs_tokens[0].size() << std::endl;
             }
         }
 

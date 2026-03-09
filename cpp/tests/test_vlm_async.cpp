@@ -161,10 +161,6 @@ int main(int argc, char** argv) {
             auto& res = gen_handles[i]->generate_result;
             if (!res.done_output.load()) {
                 all_gen_done = false;
-                if (!res.outputs_tokens.empty()) {
-                    std::cout << "Req [" << i << "] generating... tokens: " 
-                            << res.outputs_tokens[0].size() << std::endl;
-                }
             }
         }
         if (all_gen_done) break;
@@ -183,10 +179,17 @@ int main(int argc, char** argv) {
         auto& res = gen_handles[i]->generate_result;
         
         // 累加生成的 token 数量 (假设只取 beam 0)
-        auto lens = res.outputs_tokens_len();
-        if (!lens.empty()) {
-            total_tokens_generated += lens[0];
+        if (gen_config.streaming) {
+            auto lens = res.outputs_tokens_len();
+            if (!lens.empty()) {
+                total_tokens_generated += lens[0];
+            }
+        } else{
+            auto lens = res.outputs_tokens_len()[0] - res.input_tokens_len();
+            total_tokens_generated += lens;
         }
+        
+
         
         // 累加 TTFT
         double ttft = res.time_to_first_token_ms();
@@ -212,7 +215,7 @@ int main(int argc, char** argv) {
 
 
     // for (int i = 0; i < request_num; ++i) {
-    //     print_gen_summary(gen_handles[i]->generate_result);
+    print_gen_summary(gen_handles[0]->generate_result);
     // }
 
     return 0;

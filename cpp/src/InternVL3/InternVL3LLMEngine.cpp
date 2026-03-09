@@ -237,6 +237,8 @@ void InternVL3LLMEngine::generate_from_features(
         if (gen_result.has_error) throw std::runtime_error("TRT-LLM Error for Request " + std::to_string(gen_result.request_id) + ": " + gen_result.error_msg);
     }
 
+
+    std::cout << gen_config.profiling << " " << gen_config.streaming << std::endl;
     if (gen_config.profiling && !gen_config.streaming) {
 
         std::cout << "User requested profiling, and not streaming, running generate one more time to estimate time to first token" << std::endl;
