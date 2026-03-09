@@ -10,7 +10,7 @@ from tensorrt_llm.runtime import InternVLRunner
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--max_new_tokens', type=int, default=150)
+    parser.add_argument('--max_new_tokens', type=int, default=300)
     parser.add_argument('--batch_size', type=int, default=20)
     parser.add_argument('--log_level', type=str, default='info')
     parser.add_argument('--visual_engine_dir',

@@ -19,6 +19,14 @@ public:
 
     static std::unique_ptr<IMultimodalRunner> initialize();
 
+    virtual void batch_generate(
+        const std::vector<std::vector<cv::Mat>>& images, 
+        const std::vector<std::string>& user_prompt,
+        const std::vector<GenerateConfig>& gen_config,
+        std::vector<GenerateResult>& gen_result
+    ) = 0; 
+
+
     virtual void generate(
         const std::vector<cv::Mat>& images, 
         const std::string& user_prompt,

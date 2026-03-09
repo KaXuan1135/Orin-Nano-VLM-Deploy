@@ -128,8 +128,8 @@ python pt2engine.py \
 ```
 python engine_infer.py \
 --hf_model_name OpenGVLab/InternVL3-1B \
---visual_engine_dir /home/pi/kx/pt2engine_vlm/models/InternVL3-1B_i8/InternVL3-1B_vis_engine \
---llm_engine_dir /home/pi/kx/pt2engine_vlm/models/InternVL3-1B_i8/InternVL3-1B_llm_engine
+--visual_engine_dir /mnt/sdcard/models/InternVL3-1B_i8_py/InternVL3-1B_vis_engine \
+--llm_engine_dir /mnt/sdcard/models/InternVL3-1B_i8_py/InternVL3-1B_llm_engine
 ```
 
 # Benchmark
