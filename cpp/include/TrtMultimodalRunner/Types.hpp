@@ -130,7 +130,7 @@ struct GenerateResult {
     std::vector<int32_t> outputs_tokens_len() const {
         std::vector<int32_t> outputs_tokens_len;
         for (auto const& output_tokens : outputs_tokens) {
-            outputs_tokens_len.push_back(output_tokens.size());
+            outputs_tokens_len.push_back(output_tokens.size());            
         }
         return outputs_tokens_len;
     }
@@ -147,6 +147,72 @@ struct GenerateResult {
     std::chrono::high_resolution_clock::time_point start_ttft;
     std::chrono::high_resolution_clock::time_point end_ttft;
     std::atomic<bool> first_token_captured{false};
+
+    // --- NEW: Add these to allow use in std::vector ---
+
+    // 1. Default Constructor (Required for resize/emplace)
+    GenerateResult() = default;
+
+    // 2. Move Constructor
+    // We manually move strings/vectors and load() the atomic values
+    GenerateResult(GenerateResult&& other) noexcept {
+        gen_config = std::move(other.gen_config);
+        request_id = other.request_id;
+        ttft_request_id = other.ttft_request_id;
+        system_prompt = std::move(other.system_prompt);
+        user_prompt = std::move(other.user_prompt);
+        input_tokens = std::move(other.input_tokens);
+        outputs_tokens = std::move(other.outputs_tokens);
+        outputs_text = std::move(other.outputs_text);
+        last_outputs_token = std::move(other.last_outputs_token);
+        last_outputs_text = std::move(other.last_outputs_text);
+        full_stops = std::move(other.full_stops);
+        error_msg = std::move(other.error_msg);
+        
+        // Atomics must be loaded and stored
+        done_output.store(other.done_output.load());
+        has_error.store(other.has_error.load());
+        first_token_captured.store(other.first_token_captured.load());
+
+        start_gen = other.start_gen;
+        end_gen = other.end_gen;
+        start_ttft = other.start_ttft;
+        end_ttft = other.end_ttft;
+    }
+
+    // 3. Move Assignment
+    GenerateResult& operator=(GenerateResult&& other) noexcept {
+        if (this != &other) {
+            gen_config = std::move(other.gen_config);
+            request_id = other.request_id;
+            ttft_request_id = other.ttft_request_id;
+            system_prompt = std::move(other.system_prompt);
+            user_prompt = std::move(other.user_prompt);
+            input_tokens = std::move(other.input_tokens);
+            outputs_tokens = std::move(other.outputs_tokens);
+            outputs_text = std::move(other.outputs_text);
+            last_outputs_token = std::move(other.last_outputs_token);
+            last_outputs_text = std::move(other.last_outputs_text);
+            full_stops = std::move(other.full_stops);
+            error_msg = std::move(other.error_msg);
+            
+            done_output.store(other.done_output.load());
+            has_error.store(other.has_error.load());
+            first_token_captured.store(other.first_token_captured.load());
+
+            start_gen = other.start_gen;
+            end_gen = other.end_gen;
+            start_ttft = other.start_ttft;
+            end_ttft = other.end_ttft;
+        }
+        return *this;
+    }
+
+    // 4. Explicitly Delete Copy (Since atomics can't be copied)
+    GenerateResult(const GenerateResult&) = delete;
+    GenerateResult& operator=(const GenerateResult&) = delete;
+
+
 
     double generation_latency_ms() const {
         if (!gen_config.profiling) return 0.0;

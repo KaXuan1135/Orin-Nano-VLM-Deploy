@@ -160,6 +160,156 @@ std::vector<std::string> InternVL3LLMEngine::decode_outputs(
     return results;
 }
 
+void InternVL3LLMEngine::batch_generate_from_features(
+    const std::vector<VisualFeatures>& vis_features,
+    const std::vector<std::string>& user_prompts, // Changed to plural for clarity
+    const std::vector<GenerateConfig>& gen_configs,
+    std::vector<GenerateResult>& gen_results
+) {
+    size_t batch_size = vis_features.size();
+    gen_results.clear();
+    gen_results.reserve(batch_size);
+
+    std::vector<tle::Request> requests;
+    requests.reserve(batch_size);
+
+    // 1. Construct Inputs and Requests for the whole batch
+    for (size_t b = 0; b < batch_size; ++b) {
+        const auto& config = gen_configs[b];
+        
+        // Construct Textual Prompts
+        std::string pre_prompt = "<|im_start|>system\n" + config.system_prompt + "<|im_end|>\n<|im_start|>user\n";
+        std::string post_prompt = "\n" + user_prompts[b] + "<|im_end|>\n<|im_start|>assistant\n";
+
+        std::vector<int32_t> input_ids;
+        size_t cur_fake_id = tokenizer->GetVocabSize();
+
+        // Encode System/User Prefix
+        auto pre_tokens = tokenizer->Encode(pre_prompt);
+        for (auto tid : pre_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+
+        // Encode Image Patches with Placeholders
+        int num_patches = vis_features[b].total_patches(); 
+        for (int i = 0; i < num_patches; ++i) {
+            std::string prefix = config.image_prefix;
+            std::string placeholder = "$N$";
+            size_t pos = prefix.find(placeholder);
+            if (pos != std::string::npos) {
+                prefix.replace(pos, placeholder.length(), std::to_string(i + 1));
+            }
+
+            auto pre_img_tokens = tokenizer->Encode(prefix);
+            for (auto tid : pre_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+
+            // Insert Fake IDs for Visual Embeddings
+            for (int j = 0; j < m_config.patch_token_size; ++j) {
+                input_ids.push_back(cur_fake_id + j);
+            }
+            cur_fake_id += m_config.patch_token_size;
+
+            auto post_img_tokens = tokenizer->Encode(config.image_postfix);
+            for (auto tid : post_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+        }
+
+        // Encode User Message Suffix
+        auto post_tokens = tokenizer->Encode(post_prompt);
+        for (auto tid : post_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+
+        // Create the Request object
+        requests.push_back(create_request_from_dict(
+            input_ids,
+            vis_features[b],
+            m_config,
+            config,
+            metadata
+        ));
+
+        gen_results.emplace_back(); 
+        GenerateResult& res = gen_results.back();
+
+        // Now populate the reference 'res'
+        res.gen_config = config;
+        res.user_prompt = user_prompts[b];
+        res.input_tokens = input_ids;
+        res.outputs_tokens.resize(m_config.max_beam_width);
+        // res.last_outputs_token.resize(m_config.max_beam_width);
+        res.start_gen = std::chrono::high_resolution_clock::now();
+        
+        if (config.streaming) {
+            res.start_ttft = res.start_gen;
+        }
+    }
+
+    auto batch_start_gen = std::chrono::high_resolution_clock::now();
+
+    // 2. Enqueue all requests to the LLM Executor
+    for (size_t b = 0; b < batch_size; ++b) {
+        gen_results[b].request_id = llm_executor->enqueueRequest(requests[b]);
+    }
+
+    // 3. Multi-request polling loop
+    bool all_done = false;
+    while (!all_done) {
+        all_done = true;
+        std::vector<GenerateResult*> active_results;
+        
+        for (size_t b = 0; b < batch_size; ++b) {
+            if (!gen_results[b].done_output) {
+                active_results.push_back(&gen_results[b]);
+                all_done = false; 
+            }
+        }
+        if (!active_results.empty()) {
+            update_response(active_results, 1000, false);
+            
+            // Check for errors in the batch
+            for (auto* res : active_results) {
+                if (res->has_error) {
+                    throw std::runtime_error("TRT-LLM Error for Request " + 
+                        std::to_string(res->request_id) + ": " + res->error_msg);
+                }
+            }
+        }
+    }
+
+    auto batch_end_gen = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> batch_duration = batch_end_gen - batch_start_gen;
+    double total_seconds = batch_duration.count();
+    
+    int32_t total_output_tokens = 0;
+    for (const auto& res : gen_results) {
+        assert(!res.gen_config.streaming);
+        total_output_tokens += res.outputs_tokens_len()[0] - res.input_tokens_len();
+    }
+    
+    // 4. Post-generation Profiling (TTFT estimation if needed)
+    // Note: This logic repeats the inference for 1 token to measure TTFT overhead specifically.
+    for (size_t b = 0; b < batch_size; ++b) {
+        if (gen_configs[b].profiling && !gen_configs[b].streaming) {
+            GenerateConfig ttft_config = gen_configs[b];
+            ttft_config.max_new_tokens = 1;
+
+            tle::Request ttft_req = create_request_from_dict(
+                gen_results[b].input_tokens,
+                vis_features[b],
+                m_config,
+                ttft_config,
+                metadata
+            );
+
+            gen_results[b].start_ttft = std::chrono::high_resolution_clock::now();
+            gen_results[b].ttft_request_id = llm_executor->enqueueRequest(ttft_req);
+            // Reset capture flag for the profiling run
+            gen_results[b].first_token_captured = false; 
+
+            while (!gen_results[b].first_token_captured) {
+                std::vector<GenerateResult*> ptr_vec = {&gen_results[b]};
+                update_response(ptr_vec, 1000, true);
+            }
+        }
+    }
+}
+
 void InternVL3LLMEngine::generate_from_features(
     const VisualFeatures& vis_features,
     const std::string& user_prompt,
@@ -167,104 +317,121 @@ void InternVL3LLMEngine::generate_from_features(
     GenerateResult& gen_result
 ) {
 
-    //Construct Input Prompts
-    std::string pre_prompt = "<|im_start|>system\n" + gen_config.system_prompt + "<|im_end|>\n<|im_start|>user\n";
-    std::string post_prompt = "\n" + user_prompt + "<|im_end|>\n<|im_start|>assistant\n";
+    std::vector<VisualFeatures> vis_vec;
+    vis_vec.push_back(std::move(vis_features));
 
-    std::vector<std::string> images_prefix(vis_features.total_patches());
-    std::vector<std::string> images_postfix(vis_features.total_patches());
+    std::vector<std::string> prompt_vec = {user_prompt};
+    std::vector<GenerateConfig> config_vec = {gen_config};
 
-    for (int i = 0; i < vis_features.total_patches(); ++i) {
-        std::string prefix = gen_config.image_prefix;
-        std::string placeholder = "$N$";
-        std::string replacement = std::to_string(i + 1);
-        
-        size_t pos = prefix.find(placeholder);
-        if (pos != std::string::npos) prefix.replace(pos, placeholder.length(), replacement);
-        images_prefix.push_back(prefix);
-        images_postfix.push_back(gen_config.image_postfix);
-    }
+    std::vector<GenerateResult> results_vec(1); 
 
-    //Constuct Input Ids, Replace Image Token with fake tokens
-    std::vector<int32_t> input_ids;
-    size_t cur_fake_id = tokenizer->GetVocabSize();
-
-    std::vector<int32_t> pre_prompt_tokens = tokenizer->Encode(pre_prompt);
-    for (auto tid : pre_prompt_tokens) input_ids.push_back(static_cast<int32_t>(tid));
-
-    for (int i = 0; i < vis_features.total_patches(); ++i) {
-        std::vector<int32_t> pre_img_tokens = tokenizer->Encode(images_prefix[i]);
-        for (auto tid : pre_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
-
-        for (int j = 0; j < m_config.patch_token_size; ++j) input_ids.push_back(cur_fake_id + j);
-        cur_fake_id += m_config.patch_token_size;
-
-        std::vector<int32_t> post_img_tokens = tokenizer->Encode(images_postfix[i]);
-        for (auto tid : post_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
-    }
-    
-    std::vector<int32_t> post_prompt_tokens = tokenizer->Encode(post_prompt);
-    for (auto tid : post_prompt_tokens) input_ids.push_back(static_cast<int32_t>(tid));
-    
-    tle::Request request = create_request_from_dict(
-        input_ids,
-        vis_features,
-        m_config,
-        gen_config,
-        metadata
+    batch_generate_from_features(
+        vis_vec,
+        prompt_vec,
+        config_vec,
+        results_vec
     );
 
-    if (gen_config.profiling) {
-        gen_result.start_gen = std::chrono::high_resolution_clock::now();
-        if (gen_config.streaming) {
-            gen_result.start_ttft = std::chrono::high_resolution_clock::now();
-        }
-    }
+    gen_result = std::move(results_vec[0]);
 
-    std::uint64_t request_id = llm_executor->enqueueRequest(request);
-    gen_result.gen_config = gen_config;
-    gen_result.request_id = request_id;
-    gen_result.system_prompt = gen_config.system_prompt;
-    gen_result.user_prompt = user_prompt;
-    gen_result.input_tokens = input_ids;
-    gen_result.start_gen = std::chrono::high_resolution_clock::now();
-    gen_result.outputs_tokens.resize(m_config.max_beam_width);
-    gen_result.last_outputs_token.resize(m_config.max_beam_width);
+    // //Construct Input Prompts
+    // std::string pre_prompt = "<|im_start|>system\n" + gen_config.system_prompt + "<|im_end|>\n<|im_start|>user\n";
+    // std::string post_prompt = "\n" + user_prompt + "<|im_end|>\n<|im_start|>assistant\n";
 
-    while(!gen_result.done_output) {
-        std::vector<GenerateResult*> ptr_vec = {&gen_result};
-        update_response(ptr_vec, 1000, false);
-        if (gen_result.has_error) throw std::runtime_error("TRT-LLM Error for Request " + std::to_string(gen_result.request_id) + ": " + gen_result.error_msg);
-    }
+    // std::vector<std::string> images_prefix(vis_features.total_patches());
+    // std::vector<std::string> images_postfix(vis_features.total_patches());
+
+    // for (int i = 0; i < vis_features.total_patches(); ++i) {
+    //     std::string prefix = gen_config.image_prefix;
+    //     std::string placeholder = "$N$";
+    //     std::string replacement = std::to_string(i + 1);
+        
+    //     size_t pos = prefix.find(placeholder);
+    //     if (pos != std::string::npos) prefix.replace(pos, placeholder.length(), replacement);
+    //     images_prefix.push_back(prefix);
+    //     images_postfix.push_back(gen_config.image_postfix);
+    // }
+
+    // //Constuct Input Ids, Replace Image Token with fake tokens
+    // std::vector<int32_t> input_ids;
+    // size_t cur_fake_id = tokenizer->GetVocabSize();
+
+    // std::vector<int32_t> pre_prompt_tokens = tokenizer->Encode(pre_prompt);
+    // for (auto tid : pre_prompt_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+
+    // for (int i = 0; i < vis_features.total_patches(); ++i) {
+    //     std::vector<int32_t> pre_img_tokens = tokenizer->Encode(images_prefix[i]);
+    //     for (auto tid : pre_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+
+    //     for (int j = 0; j < m_config.patch_token_size; ++j) input_ids.push_back(cur_fake_id + j);
+    //     cur_fake_id += m_config.patch_token_size;
+
+    //     std::vector<int32_t> post_img_tokens = tokenizer->Encode(images_postfix[i]);
+    //     for (auto tid : post_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+    // }
+    
+    // std::vector<int32_t> post_prompt_tokens = tokenizer->Encode(post_prompt);
+    // for (auto tid : post_prompt_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+    
+    // tle::Request request = create_request_from_dict(
+    //     input_ids,
+    //     vis_features,
+    //     m_config,
+    //     gen_config,
+    //     metadata
+    // );
+
+    // if (gen_config.profiling) {
+    //     gen_result.start_gen = std::chrono::high_resolution_clock::now();
+    //     if (gen_config.streaming) {
+    //         gen_result.start_ttft = std::chrono::high_resolution_clock::now();
+    //     }
+    // }
+
+    // std::uint64_t request_id = llm_executor->enqueueRequest(request);
+    // gen_result.gen_config = gen_config;
+    // gen_result.request_id = request_id;
+    // gen_result.system_prompt = gen_config.system_prompt;
+    // gen_result.user_prompt = user_prompt;
+    // gen_result.input_tokens = input_ids;
+    // gen_result.start_gen = std::chrono::high_resolution_clock::now();
+    // gen_result.outputs_tokens.resize(m_config.max_beam_width);
+    // gen_result.last_outputs_token.resize(m_config.max_beam_width);
+
+    // while(!gen_result.done_output) {
+    //     std::vector<GenerateResult*> ptr_vec = {&gen_result};
+    //     update_response(ptr_vec, 1000, false);
+    //     if (gen_result.has_error) throw std::runtime_error("TRT-LLM Error for Request " + std::to_string(gen_result.request_id) + ": " + gen_result.error_msg);
+    // }
 
 
-    std::cout << gen_config.profiling << " " << gen_config.streaming << std::endl;
-    if (gen_config.profiling && !gen_config.streaming) {
+    // std::cout << gen_config.profiling << " " << gen_config.streaming << std::endl;
+    // if (gen_config.profiling && !gen_config.streaming) {
 
-        std::cout << "User requested profiling, and not streaming, running generate one more time to estimate time to first token" << std::endl;
+    //     std::cout << "User requested profiling, and not streaming, running generate one more time to estimate time to first token" << std::endl;
 
-        GenerateConfig ttft_config = gen_config;
-        ttft_config.max_new_tokens = 1;
+    //     GenerateConfig ttft_config = gen_config;
+    //     ttft_config.max_new_tokens = 1;
 
-        // 这里再跑一次 llm executor，复用之前的 visual encoded embeddings
-        tle::Request ttft_request = create_request_from_dict(
-            input_ids,
-            vis_features,
-            m_config,
-            ttft_config,
-            metadata
-        );
+    //     // 这里再跑一次 llm executor，复用之前的 visual encoded embeddings
+    //     tle::Request ttft_request = create_request_from_dict(
+    //         input_ids,
+    //         vis_features,
+    //         m_config,
+    //         ttft_config,
+    //         metadata
+    //     );
 
-        gen_result.start_ttft = std::chrono::high_resolution_clock::now();
-        std::uint64_t ttft_request_id = llm_executor->enqueueRequest(ttft_request);
+    //     gen_result.start_ttft = std::chrono::high_resolution_clock::now();
+    //     std::uint64_t ttft_request_id = llm_executor->enqueueRequest(ttft_request);
 
-        while(!gen_result.first_token_captured) {
-            std::vector<GenerateResult*> ptr_vec = {&gen_result};
-            update_response(ptr_vec, 1000, true);
-            if (gen_result.has_error) throw std::runtime_error("TRT-LLM Error for Request " + std::to_string(gen_result.ttft_request_id) + ": " + gen_result.error_msg);
-        }
+    //     while(!gen_result.first_token_captured) {
+    //         std::vector<GenerateResult*> ptr_vec = {&gen_result};
+    //         update_response(ptr_vec, 1000, true);
+    //         if (gen_result.has_error) throw std::runtime_error("TRT-LLM Error for Request " + std::to_string(gen_result.ttft_request_id) + ": " + gen_result.error_msg);
+    //     }
 
-    }
+    // }
 
 }
 
@@ -360,7 +527,7 @@ void InternVL3LLMEngine::update_response(
         if (it == request_results.end()) continue;
         
         GenerateResult* res = *it;
-
+        
         if (resp.hasError()) {
             res->error_msg = resp.getErrorMsg();
             res->has_error.store(true);
@@ -372,26 +539,32 @@ void InternVL3LLMEngine::update_response(
         ) {
             res->first_token_captured.store(true);
             res->end_ttft = std::chrono::high_resolution_clock::now();
+            if (time_to_first_token_run) break;
         }
         auto const& result = resp.getResult();
-        for (size_t beam_idx = 0; beam_idx < result.outputTokenIds.size(); ++beam_idx) {
-            auto const& tokens = result.outputTokenIds[beam_idx];
-            for (auto tokenId : tokens) {
-                res->outputs_tokens[beam_idx].push_back(static_cast<int>(tokenId));
+        if (res->gen_config.streaming) {
+            // Streaming, the llm_engine only return result of output tokens
+            for (size_t beam_idx = 0; beam_idx < result.outputTokenIds.size(); ++beam_idx) {
+                auto const& tokens = result.outputTokenIds[beam_idx];
+                for (auto tokenId : tokens) {
+                    res->outputs_tokens[beam_idx].push_back(static_cast<int>(tokenId));
+                }
             }
-            res->last_outputs_token[beam_idx] = tokens;
+        } else {
+            // Non-Streaming, the llm_engine return result of input + output tokens
+            for (size_t beam_idx = 0; beam_idx < result.outputTokenIds.size(); ++beam_idx) {
+                auto const& tokens = result.outputTokenIds[beam_idx];
+                for (size_t i = res->input_tokens_len(); i < tokens.size(); ++i) {
+                    res->outputs_tokens[beam_idx].push_back(static_cast<int>(tokens[i]));
+                }
+            }
         }
-
-        res->last_outputs_text = decode_outputs(
-            res->last_outputs_token,
-            res->gen_config.streaming ? 0 : res->input_tokens_len()
-        );
 
         if (result.isFinal && !time_to_first_token_run) {
             res->done_output.store(true);
             res->outputs_text = decode_outputs(
                 res->outputs_tokens,
-                res->gen_config.streaming ? 0 : res->input_tokens_len()
+                0
             );
 
             for (size_t m = 0; m < res->outputs_tokens.size(); ++m) {

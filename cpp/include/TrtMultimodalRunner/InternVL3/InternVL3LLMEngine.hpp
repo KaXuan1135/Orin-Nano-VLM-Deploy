@@ -15,6 +15,13 @@ public:
         const cudaStream_t& stream
     );    
 
+    void batch_generate_from_features(
+        const std::vector<VisualFeatures>& visual_features,
+        const std::vector<std::string>& user_prompt,
+        const std::vector<GenerateConfig>& generate_config,
+        std::vector<GenerateResult>& gen_result
+    );
+
     void generate_from_features(
         const VisualFeatures& visual_features,
         const std::string& user_prompt,
