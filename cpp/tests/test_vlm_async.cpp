@@ -102,7 +102,7 @@ int main(int argc, char** argv) {
     gen_config.system_prompt = "你是由上海人工智能实验室联合商汤科技开发的书生多模态大模型, 英文名叫InternVL, 是一个有用无害的人工智能助手。";
     gen_config.image_prefix = "Image-$N$: ";
     gen_config.image_postfix = "\n";
-    gen_config.max_new_tokens = 150;
+    gen_config.max_new_tokens = 512;
     gen_config.top_k = 1;
     gen_config.top_p = 0.0f;
     gen_config.temperature = 1.0f;
@@ -114,7 +114,7 @@ int main(int argc, char** argv) {
     gen_config.streaming = true;
     gen_config.profiling = true;
 
-    int request_num = 1;
+    int request_num = 20;
 
     std::unique_ptr<trt_multimodal::IAsyncMultimodalRunner> runner = trt_multimodal::IAsyncMultimodalRunner::create(m_config);
 
@@ -146,13 +146,13 @@ int main(int argc, char** argv) {
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
-
+    auto all_gen_start = std::chrono::high_resolution_clock::now();
     std::cout << "done" << std::endl;
 
     std::vector<trt_multimodal::SharedVisGenHandle> gen_handles;
     for (int i = 0; i < request_num; ++i) {
-        gen_handles.push_back(runner->enqueue_generate_from_features(
-            vis_handles[i]->visual_features, inputText, gen_config));
+        runner->enqueue_generate_from_features(vis_handles[i], inputText, gen_config);
+        gen_handles.push_back(vis_handles[i]);
     }
 
     while (true) {
@@ -189,8 +189,6 @@ int main(int argc, char** argv) {
             total_tokens_generated += lens;
         }
         
-
-        
         // 累加 TTFT
         double ttft = res.time_to_first_token_ms();
         if (ttft > 0) {
@@ -215,7 +213,7 @@ int main(int argc, char** argv) {
 
 
     // for (int i = 0; i < request_num; ++i) {
-    print_gen_summary(gen_handles[0]->generate_result);
+    //     print_gen_summary(gen_handles[i]->generate_result);
     // }
 
     return 0;

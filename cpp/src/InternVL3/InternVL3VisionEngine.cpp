@@ -186,7 +186,7 @@ namespace trt_multimodal {
             images,
             gen_config,
             handle->visual_features,
-            false
+            true
         );
         handle->vis_finished.store(true);
     }

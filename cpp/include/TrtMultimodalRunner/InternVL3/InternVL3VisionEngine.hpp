@@ -44,6 +44,7 @@ private:
     std::unique_ptr<VisionSession> vis_engine;
     ModelConfig m_config;
     cudaStream_t m_stream;
+    cudaEvent_t event;
 
     class TRTLogger : public nvinfer1::ILogger {
         void log(Severity severity, const char* msg) noexcept override {

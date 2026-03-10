@@ -52,12 +52,12 @@ SharedVisGenHandle AsyncInternVL3Runner::enqueue_extract_visual_features(
     return handle;
 }
 
-SharedVisGenHandle AsyncInternVL3Runner::enqueue_generate_from_features(
-    const VisualFeatures& vis_features,
+void AsyncInternVL3Runner::enqueue_generate_from_features(
+    SharedVisGenHandle& handle,
+    // const VisualFeatures& vis_features,
     const std::string& user_prompt,
     const GenerateConfig& gen_config
 ) {
-    SharedVisGenHandle handle = std::make_shared<VisGenHandle>();
     handle->llm_task_id = llm_rid++;
     handle->do_llm.store(true);
     handle->generate_result.gen_config = gen_config;
@@ -65,8 +65,9 @@ SharedVisGenHandle AsyncInternVL3Runner::enqueue_generate_from_features(
     {
         std::lock_guard<std::mutex> lock(m_llm_queue_mutex);
         m_queue_llm_tasks.push_back(handle);
+        std::cout << "[LLM Task] : Queue " << m_queue_llm_tasks.size() << std::endl;
     }
-    return handle;
+    // return handle;
 }
 
 void AsyncInternVL3Runner::worker_loop(
@@ -79,8 +80,8 @@ void AsyncInternVL3Runner::worker_loop(
                 SharedVisGenHandle handle = m_queue_vis_tasks.front();
 
                 std::lock_guard<std::mutex> map_lock(m_map_mutex);
-                if ((m_inflight_vis_tasks.size() < max_inflight_vis) && handle && (m_inflight_llm_tasks.size() < max_inflight_llm)) {
-                // if ((m_inflight_vis_tasks.size() < max_inflight_vis) && handle) {
+                // if ((m_inflight_vis_tasks.size() < max_inflight_vis) && handle && (m_inflight_llm_tasks.size() < max_inflight_llm)) {
+                if ((m_inflight_vis_tasks.size() < max_inflight_vis) && handle) {
                     m_queue_vis_tasks.pop_front();
                     
                     m_inflight_vis_tasks[handle->vis_task_id] = handle;
@@ -99,6 +100,16 @@ void AsyncInternVL3Runner::worker_loop(
             std::lock_guard<std::mutex> lock(m_map_mutex);
             for (auto it = m_inflight_vis_tasks.begin(); it != m_inflight_vis_tasks.end(); ++it) {
                 auto& handle = it->second;
+
+                // cudaError_t status = cudaEventQuery(handle->vis_finished_event);
+                // if (status == cudaSuccess) {
+                //     handle->vis_finished.store(true);
+                //     // cudaEventDestroy(handle->vis_finished_event); // 完成后清理
+                // } else if (status == cudaErrorNotReady) {
+                //     continue; // GPU 还在跑，别管它，继续下一轮循环
+                // }
+
+
                 if (handle->vis_finished.load()) {
                     if (handle->do_llm.load()) {
                         std::lock_guard<std::mutex> lock(m_llm_queue_mutex);

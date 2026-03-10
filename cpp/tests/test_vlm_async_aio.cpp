@@ -102,19 +102,19 @@ int main(int argc, char** argv) {
     gen_config.system_prompt = "你是由上海人工智能实验室联合商汤科技开发的书生多模态大模型, 英文名叫InternVL, 是一个有用无害的人工智能助手。";
     gen_config.image_prefix = "Image-$N$: ";
     gen_config.image_postfix = "\n";
-    gen_config.max_new_tokens = 512;
-    gen_config.top_k = 30;
-    gen_config.top_p = 0.2f;
-    gen_config.temperature = 0.8f;
+    gen_config.max_new_tokens = 350;
+    gen_config.top_k = 1;
+    gen_config.top_p = 0.0f;
+    gen_config.temperature = 0.2f;
     gen_config.repetition_penalty = 1.0f;
     gen_config.min_patch = 1;
     gen_config.max_patch = 1;
     gen_config.patch_size = 448;
     gen_config.use_thumbnail = false;
-    gen_config.streaming = true;
+    gen_config.streaming = false;
     gen_config.profiling = true;
 
-    int request_num = 1;
+    int request_num = 20;
 
     std::unique_ptr<trt_multimodal::IAsyncMultimodalRunner> runner = trt_multimodal::IAsyncMultimodalRunner::create(m_config);
 

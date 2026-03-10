@@ -434,6 +434,8 @@ void InternVL3LLMEngine::generate_from_features(
 
 }
 
+
+
 void InternVL3LLMEngine::enqueue_generate_from_features(
     const VisualFeatures& vis_features,
     const std::string& user_prompt,
@@ -457,8 +459,8 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
         if (pos != std::string::npos) {
             prefix.replace(pos, placeholder.length(), replacement);
         }
-        images_prefix.push_back(prefix);
-        images_postfix.push_back(gen_config.image_postfix);
+        images_prefix[i] = prefix;
+        images_postfix[i] = gen_config.image_postfix;
     }
 
     //Constuct Input Ids, Replace Image Token with fake tokens
