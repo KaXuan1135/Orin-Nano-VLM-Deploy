@@ -239,8 +239,6 @@ void InternVL3LLMEngine::batch_generate_from_features(
         }
     }
 
-    auto batch_start_gen = std::chrono::high_resolution_clock::now();
-
     // 2. Enqueue all requests to the LLM Executor
     for (size_t b = 0; b < batch_size; ++b) {
         gen_results[b].request_id = llm_executor->enqueueRequest(requests[b]);
@@ -271,16 +269,6 @@ void InternVL3LLMEngine::batch_generate_from_features(
         }
     }
 
-    auto batch_end_gen = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> batch_duration = batch_end_gen - batch_start_gen;
-    double total_seconds = batch_duration.count();
-    
-    int32_t total_output_tokens = 0;
-    for (const auto& res : gen_results) {
-        assert(!res.gen_config.streaming);
-        total_output_tokens += res.outputs_tokens_len()[0] - res.input_tokens_len();
-    }
-    
     // 4. Post-generation Profiling (TTFT estimation if needed)
     // Note: This logic repeats the inference for 1 token to measure TTFT overhead specifically.
     for (size_t b = 0; b < batch_size; ++b) {
