@@ -1,4 +1,5 @@
 #include <memory>
+#include <cassert>
 #include <fstream>
 #include <opencv2/opencv.hpp>
 #include <cuda_runtime.h>
@@ -51,7 +52,7 @@ namespace trt_multimodal {
                             best_ratio_diff = ratio_diff;
                             best_ratio = {i, j};
                         } else if (ratio_diff == best_ratio_diff) {
-                            // 逻辑：如果比例相同，优先选择面积覆盖大的（对应 Python 代码逻辑）
+                            // 如果比例相同，优先选择面积覆盖大的（对应 Python 代码逻辑）
                             if (i * j > best_ratio.width * best_ratio.height) {
                                 best_ratio = {i, j};
                             }
@@ -120,11 +121,13 @@ namespace trt_multimodal {
         size_t current_patch_global_idx = 0;
         for (size_t img_idx = 0; img_idx < images.size(); ++img_idx) {
             const cv::Mat& img = images[img_idx];
+            assert(img.isContinuous());
             
             uint8_t* d_src_img = nullptr;
             size_t img_bytes = img.total() * 3;
-            cudaMallocAsync(&d_src_img, img_bytes, m_stream);
-            cudaMemcpyAsync(d_src_img, img.data, img_bytes, cudaMemcpyHostToDevice, m_stream);
+
+            cudaHostRegister(img.data, img_bytes, cudaHostRegisterMapped);
+            cudaHostGetDevicePointer(&d_src_img, img.data, 0);
 
             __half* d_patch_start = (__half*)d_input_fp16 + (current_patch_global_idx * pixels_per_patch);
             
@@ -183,7 +186,7 @@ namespace trt_multimodal {
             images,
             gen_config,
             handle->visual_features,
-            false
+            true
         );
         handle->vis_finished.store(true);
     }

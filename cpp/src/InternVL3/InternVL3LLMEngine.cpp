@@ -80,7 +80,7 @@ TokenizerMetadata get_tokenizer_ids(const std::string& path) {
     json data = json::parse(f);
     TokenizerMetadata meta;
 
-    // 优先从 added_tokens 找 (这些通常具有最高优先级)
+    // 优先从 added_tokens 找
     if (data.contains("added_tokens")) {
         for (auto& t : data["added_tokens"]) {
             std::string content = t["content"];
@@ -138,7 +138,6 @@ std::string strip(const std::string& s) {
 }
 
 std::vector<std::string> InternVL3LLMEngine::decode_outputs(
-    // const std::vector<int32_t>& flat_beams_tokens, // 扁平化的 ids
     const std::vector<std::vector<int32_t>> beams_tokens,
     size_t input_len
 ) {
@@ -435,6 +434,8 @@ void InternVL3LLMEngine::generate_from_features(
 
 }
 
+
+
 void InternVL3LLMEngine::enqueue_generate_from_features(
     const VisualFeatures& vis_features,
     const std::string& user_prompt,
@@ -458,8 +459,8 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
         if (pos != std::string::npos) {
             prefix.replace(pos, placeholder.length(), replacement);
         }
-        images_prefix.push_back(prefix);
-        images_postfix.push_back(gen_config.image_postfix);
+        images_prefix[i] = prefix;
+        images_postfix[i] = gen_config.image_postfix;
     }
 
     //Constuct Input Ids, Replace Image Token with fake tokens

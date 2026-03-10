@@ -30,8 +30,9 @@ public:
         const GenerateConfig& gen_config
     ) = 0;
 
-    virtual SharedVisGenHandle enqueue_generate_from_features(
-        const VisualFeatures& visual_features,
+    virtual void enqueue_generate_from_features(
+        SharedVisGenHandle& handle,
+        // const VisualFeatures& visual_features,
         const std::string& user_prompt,
         const GenerateConfig& gen_config
     ) = 0;

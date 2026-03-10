@@ -28,6 +28,7 @@ SharedVisGenHandle AsyncInternVL3Runner::enqueue_generate(
     const GenerateConfig& gen_config) 
 {
     SharedVisGenHandle handle = enqueue_extract_visual_features(images, gen_config);
+    handle->llm_task_id = llm_rid++;
     handle->do_llm.store(true);
     handle->generate_result.gen_config = gen_config;
     handle->generate_result.user_prompt = user_prompt;
@@ -39,72 +40,131 @@ SharedVisGenHandle AsyncInternVL3Runner::enqueue_extract_visual_features(
     const GenerateConfig& gen_config
 ) {
     SharedVisGenHandle handle = std::make_shared<VisGenHandle>();
-    m_sync_runner.vis_engine.enqueue_extract_visual_features(images, gen_config, handle);
-    // runner create the id for vision task, it is not like llm executor has its own request id
-    handle->visual_features.request_id = vis_rid++;
+    handle->visual_features.images = images;
+    handle->visual_features.gen_config = gen_config;
+    handle->vis_task_id = vis_rid++;
     handle->do_vis.store(true);
-    m_inflight_vis_tasks[handle->visual_features.request_id] = handle;
+    {
+        std::lock_guard<std::mutex> lock(m_vis_queue_mutex);
+        m_queue_vis_tasks.push_back(handle);
+        std::cout << "[VIS Task] : Queue " << m_queue_vis_tasks.size() << std::endl;
+    }
     return handle;
 }
 
-SharedVisGenHandle AsyncInternVL3Runner::enqueue_generate_from_features(
-    const VisualFeatures& vis_features,
+void AsyncInternVL3Runner::enqueue_generate_from_features(
+    SharedVisGenHandle& handle,
+    // const VisualFeatures& vis_features,
     const std::string& user_prompt,
     const GenerateConfig& gen_config
 ) {
-    SharedVisGenHandle handle = std::make_shared<VisGenHandle>();
-    m_sync_runner.llm_engine.enqueue_generate_from_features(vis_features, user_prompt, gen_config, handle);
+    handle->llm_task_id = llm_rid++;
     handle->do_llm.store(true);
-    m_inflight_llm_tasks[handle->generate_result.request_id] = handle;
-    return handle;
+    handle->generate_result.gen_config = gen_config;
+    handle->generate_result.user_prompt = user_prompt;
+    {
+        std::lock_guard<std::mutex> lock(m_llm_queue_mutex);
+        m_queue_llm_tasks.push_back(handle);
+        std::cout << "[LLM Task] : Queue " << m_queue_llm_tasks.size() << std::endl;
+    }
+    // return handle;
 }
 
 void AsyncInternVL3Runner::worker_loop(
 ) {
     while (!m_stop) {
         std::vector<GenerateResult*> gen_results;
-        {
-            std::lock_guard<std::mutex> lock(m_map_mutex);
-            if (m_inflight_vis_tasks.empty() && m_inflight_llm_tasks.empty()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                continue;
-            }
+        {   // Vision : Queue -> Process
+            std::lock_guard<std::mutex> lock(m_vis_queue_mutex);
+            if (!m_queue_vis_tasks.empty()) {
+                SharedVisGenHandle handle = m_queue_vis_tasks.front();
 
-            // See which vision has done, and if it need to auto do llm
-            for (auto it = m_inflight_vis_tasks.begin(); it != m_inflight_vis_tasks.end(); ) {
-                auto& handle = it->second;
-                
-                if (handle->vis_finished.load()) {
-                    if (handle->do_llm.load()) {
-                        std::cout << "Task " << handle->visual_features.request_id << " moved to LLM" << std::endl;
-                        m_sync_runner.llm_engine.enqueue_generate_from_features(handle->visual_features, handle->generate_result.user_prompt, handle->generate_result.gen_config, handle);
-                        m_inflight_llm_tasks[handle->generate_result.request_id] = handle;
-                    }
-                    it = m_inflight_vis_tasks.erase(it);
+                std::lock_guard<std::mutex> map_lock(m_map_mutex);
+                // if ((m_inflight_vis_tasks.size() < max_inflight_vis) && handle && (m_inflight_llm_tasks.size() < max_inflight_llm)) {
+                if ((m_inflight_vis_tasks.size() < max_inflight_vis) && handle) {
+                    m_queue_vis_tasks.pop_front();
+                    
+                    m_inflight_vis_tasks[handle->vis_task_id] = handle;
+                    m_sync_runner.vis_engine.enqueue_extract_visual_features(
+                        handle->visual_features.images, 
+                        handle->visual_features.gen_config, 
+                        handle);
+
+                    std::cout << "[VIS Task] : Process " << m_inflight_vis_tasks.size() << " / " << max_inflight_vis << std::endl;
                 } else {
-                    ++it;
+                    // std::cout << std::endl;
                 }
             }
+        }
+        {
+            std::lock_guard<std::mutex> lock(m_map_mutex);
+            for (auto it = m_inflight_vis_tasks.begin(); it != m_inflight_vis_tasks.end(); ++it) {
+                auto& handle = it->second;
 
+                // cudaError_t status = cudaEventQuery(handle->vis_finished_event);
+                // if (status == cudaSuccess) {
+                //     handle->vis_finished.store(true);
+                //     // cudaEventDestroy(handle->vis_finished_event); // 完成后清理
+                // } else if (status == cudaErrorNotReady) {
+                //     continue; // GPU 还在跑，别管它，继续下一轮循环
+                // }
+
+
+                if (handle->vis_finished.load()) {
+                    if (handle->do_llm.load()) {
+                        std::lock_guard<std::mutex> lock(m_llm_queue_mutex);
+                        m_queue_llm_tasks.push_back(handle);
+                        std::cout << "[LLM Task] : Queue " << m_queue_llm_tasks.size() << std::endl;
+                    }
+                    it = m_inflight_vis_tasks.erase(it);
+                    break;
+                }
+            }
+        }
+        {   // LLM : Queue -> Process
+            std::lock_guard<std::mutex> lock(m_llm_queue_mutex);
+
+            if (!m_queue_llm_tasks.empty()) {
+                SharedVisGenHandle handle = m_queue_llm_tasks.front();
+
+                std::lock_guard<std::mutex> map_lock(m_map_mutex);
+                if ((m_inflight_llm_tasks.size() < max_inflight_llm) && handle) {
+                    m_queue_llm_tasks.pop_front();
+                    
+                    m_inflight_llm_tasks[handle->llm_task_id] = handle;
+                    m_sync_runner.llm_engine.enqueue_generate_from_features(
+                        handle->visual_features, 
+                        handle->generate_result.user_prompt, 
+                        handle->generate_result.gen_config, 
+                        handle);
+
+                    std::cout << "[LLM Task] : Process " << m_inflight_llm_tasks.size() << " / " << max_inflight_llm << std::endl;
+                } else {
+                    // std::cout << std::endl;
+                }
+
+            }
+        }
+        {
+            std::lock_guard<std::mutex> map_lock(m_map_mutex);
             for (auto& [rid, handle] : m_inflight_llm_tasks) {
                 gen_results.push_back(&(handle->generate_result));
             }
         }
-
-        std::cout << gen_results.size() << " gen running" << std::endl;
         m_sync_runner.llm_engine.update_response(gen_results, 1000, false);
 
-        for (size_t i = 0; i < gen_results.size(); ++i) {
-            auto& res = gen_results[i];
-            if (!res->outputs_tokens.empty()) {
-                std::cout << "Req [" << res->request_id << "] generating... tokens: " 
-                        << res->outputs_tokens[0].size() << std::endl;
-            }
-        }
+        // for (size_t i = 0; i < gen_results.size(); ++i) {
+        //     auto& res = gen_results[i];
+        //     if (!res->done_output.load()) {
+        //         if (!res->outputs_tokens.empty()) {
+        //             std::cout << "Req [" << res->request_id << "] generating... tokens: " 
+        //                     << res->outputs_tokens[0].size() << std::endl;
+        //         }
+        //     }
+        // }
 
-        {
+        {   // LLM : Done -> Removed
             std::lock_guard<std::mutex> lock(m_map_mutex);
-
             for (auto it = m_inflight_llm_tasks.begin(); it != m_inflight_llm_tasks.end(); ) {
                 auto& handle = it->second;
                 

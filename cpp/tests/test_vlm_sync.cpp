@@ -28,7 +28,7 @@ int main(int argc, char** argv) {
     gen_config.system_prompt = "你是由上海人工智能实验室联合商汤科技开发的书生多模态大模型, 英文名叫InternVL, 是一个有用无害的人工智能助手。";
     gen_config.image_prefix = "Image-$N$: ";
     gen_config.image_postfix = "\n";
-    gen_config.max_new_tokens = 300;
+    gen_config.max_new_tokens = 350;
     gen_config.top_k = 1;
     gen_config.top_p = 0.0f;
     gen_config.temperature = 0.2f;
@@ -39,6 +39,8 @@ int main(int argc, char** argv) {
     gen_config.use_thumbnail = false;
     gen_config.streaming = false;
     gen_config.profiling = true;
+
+    int request_num = 20;
 
     std::string inputText = "Can you describe the 6 images?";
 
@@ -61,10 +63,12 @@ int main(int argc, char** argv) {
         single_request_frames.push_back(std::move(rgbImg));
     }
 
-    std::vector<std::vector<cv::Mat>> batch_frames(m_config.max_llm_batch, single_request_frames);
-    std::vector<std::string> batch_prompts(m_config.max_llm_batch, inputText);
-    std::vector<trt_multimodal::GenerateConfig> batch_configs(m_config.max_llm_batch, gen_config);
+    std::vector<std::vector<cv::Mat>> batch_frames(request_num, single_request_frames);
+    std::vector<std::string> batch_prompts(request_num, inputText);
+    std::vector<trt_multimodal::GenerateConfig> batch_configs(request_num, gen_config);
     std::vector<trt_multimodal::GenerateResult> gen_results;
+
+    auto all_gen_start = std::chrono::high_resolution_clock::now();
 
     runner->batch_generate(
         batch_frames,
@@ -72,6 +76,46 @@ int main(int argc, char** argv) {
         batch_configs,
         gen_results
     );
+
+    auto all_gen_end = std::chrono::high_resolution_clock::now();
+
+    double total_elapsed_ms = std::chrono::duration<double, std::milli>(all_gen_end - all_gen_start).count();
+
+    double total_tokens_generated = 0;
+    double total_ttft_ms = 0;
+    int valid_ttft_count = 0;
+
+    for (int i = 0; i < request_num; ++i) {
+        auto& res = gen_results[i];
+        
+        // 累加生成的 token 数量 (假设只取 beam 0)
+        auto lens = res.outputs_tokens_len();
+        if (!lens.empty()) {
+            total_tokens_generated += lens[0];
+        }
+        
+        // 累加 TTFT
+        double ttft = res.time_to_first_token_ms();
+        if (ttft > 0) {
+            total_ttft_ms += ttft;
+            valid_ttft_count++;
+        }
+    }
+
+    double overall_tokens_per_second = (total_tokens_generated / total_elapsed_ms) * 1000.0;
+    double avg_output_tokens = total_tokens_generated / request_num;
+    double avg_ttft = (valid_ttft_count > 0) ? (total_ttft_ms / valid_ttft_count) : 0.0;
+
+    std::cout << "\n" << std::string(40, '=') << std::endl;
+    std::cout << "Performance Summary" << std::endl;
+    std::cout << std::string(40, '-') << std::endl;
+    std::cout << std::fixed << std::setprecision(2);
+    std::cout << "Total Elapsed Time    : " << total_elapsed_ms << " ms" << std::endl;
+    std::cout << "Overall Throughput    : " << overall_tokens_per_second << " tokens/s" << std::endl;
+    std::cout << "Avg Output Tokens/Req : " << avg_output_tokens << " tokens" << std::endl;
+    std::cout << "Average TTFT          : " << avg_ttft << " ms" << std::endl;
+    std::cout << std::string(40, '=') << std::endl;
+
 
     auto batch_start = gen_results[0].start_gen; 
     auto batch_end = gen_results[0].end_gen;
@@ -93,27 +137,27 @@ int main(int argc, char** argv) {
 
     double batch_tps = (total_seconds > 0) ? (total_generated_tokens / total_seconds) : 0.0;
 
-    std::cout << "\n--- Batch Generation Performance ---" << std::endl;
-    std::cout << "Total Tokens Generated : " << total_generated_tokens << " tokens" << std::endl;
-    std::cout << "Batch Wall-clock Time  : " << std::fixed << std::setprecision(4) << total_seconds << " s" << std::endl;
-    std::cout << "Batch Throughput       : " << std::fixed << std::setprecision(2) << batch_tps << " tokens/sec" << std::endl;
-    std::cout << "------------------------------------" << std::endl;
-    std::cout << "\n" << "Model Generated Outputs (Batch 0)" << "\n";
-    std::cout << " ===========================================" << "\n";
-    if (gen_results[0].outputs_text.empty()) {
-        std::cout << "  " << "[No text generated]" << "\n";
-    } else {
-        for (size_t i = 0; i < gen_results[0].outputs_text.size(); ++i) {
-            if (gen_results[0].outputs_text.size() > 1) {
-                std::cout << "  Beam " << i << ":" << "\n";
-            }
-            std::cout << "  \"" << gen_results[0].outputs_text[i] << "\"" << "\n";
-            if (i < gen_results[0].outputs_text.size() - 1) {
-                std::cout << "  -------------------------------------------" << "\n";
-            }
-        }
-    }
-    std::cout << " ===========================================\n" << std::endl;
+    // std::cout << "\n--- Batch Generation Performance ---" << std::endl;
+    // std::cout << "Total Tokens Generated : " << total_generated_tokens << " tokens" << std::endl;
+    // std::cout << "Batch Wall-clock Time  : " << std::fixed << std::setprecision(4) << total_seconds << " s" << std::endl;
+    // std::cout << "Batch Throughput       : " << std::fixed << std::setprecision(2) << batch_tps << " tokens/sec" << std::endl;
+    // std::cout << "------------------------------------" << std::endl;
+    // std::cout << "\n" << "Model Generated Outputs (Batch 0)" << "\n";
+    // std::cout << " ===========================================" << "\n";
+    // if (gen_results[0].outputs_text.empty()) {
+    //     std::cout << "  " << "[No text generated]" << "\n";
+    // } else {
+    //     for (size_t i = 0; i < gen_results[0].outputs_text.size(); ++i) {
+    //         if (gen_results[0].outputs_text.size() > 1) {
+    //             std::cout << "  Beam " << i << ":" << "\n";
+    //         }
+    //         std::cout << "  \"" << gen_results[0].outputs_text[i] << "\"" << "\n";
+    //         if (i < gen_results[0].outputs_text.size() - 1) {
+    //             std::cout << "  -------------------------------------------" << "\n";
+    //         }
+    //     }
+    // }
+    // std::cout << " ===========================================\n" << std::endl;
 
     return 0;
 }
