@@ -126,8 +126,12 @@ namespace trt_multimodal {
             uint8_t* d_src_img = nullptr;
             size_t img_bytes = img.total() * 3;
 
-            cudaHostRegister(img.data, img_bytes, cudaHostRegisterMapped);
-            cudaHostGetDevicePointer(&d_src_img, img.data, 0);
+            cudaMallocAsync(&d_src_img, img_bytes, m_stream);
+            cudaMemcpyAsync(d_src_img, img.data, img_bytes, cudaMemcpyHostToDevice, m_stream);
+
+            // If use pinned memory, dont use cudafreeasync in the back, use unregister
+            // cudaHostRegister(img.data, img_bytes, cudaHostRegisterMapped);
+            // cudaHostGetDevicePointer(&d_src_img, img.data, 0);
 
             __half* d_patch_start = (__half*)d_input_fp16 + (current_patch_global_idx * pixels_per_patch);
             

@@ -100,16 +100,6 @@ void AsyncInternVL3Runner::worker_loop(
             std::lock_guard<std::mutex> lock(m_map_mutex);
             for (auto it = m_inflight_vis_tasks.begin(); it != m_inflight_vis_tasks.end(); ++it) {
                 auto& handle = it->second;
-
-                // cudaError_t status = cudaEventQuery(handle->vis_finished_event);
-                // if (status == cudaSuccess) {
-                //     handle->vis_finished.store(true);
-                //     // cudaEventDestroy(handle->vis_finished_event); // 完成后清理
-                // } else if (status == cudaErrorNotReady) {
-                //     continue; // GPU 还在跑，别管它，继续下一轮循环
-                // }
-
-
                 if (handle->vis_finished.load()) {
                     if (handle->do_llm.load()) {
                         std::lock_guard<std::mutex> lock(m_llm_queue_mutex);
@@ -152,16 +142,6 @@ void AsyncInternVL3Runner::worker_loop(
             }
         }
         m_sync_runner.llm_engine.update_response(gen_results, 1000, false);
-
-        // for (size_t i = 0; i < gen_results.size(); ++i) {
-        //     auto& res = gen_results[i];
-        //     if (!res->done_output.load()) {
-        //         if (!res->outputs_tokens.empty()) {
-        //             std::cout << "Req [" << res->request_id << "] generating... tokens: " 
-        //                     << res->outputs_tokens[0].size() << std::endl;
-        //         }
-        //     }
-        // }
 
         {   // LLM : Done -> Removed
             std::lock_guard<std::mutex> lock(m_map_mutex);
