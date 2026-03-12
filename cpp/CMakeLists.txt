@@ -4,6 +4,7 @@ project(trtcppinference VERSION 1.0.0 LANGUAGES CXX CUDA)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_ARCHITECTURES 87)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 set(TRT_LLM_ROOT "/home/pi/kx/TensorRT-LLM" CACHE PATH "Path to TensorRT-LLM root directory")
 message(STATUS "[Internal] Using TRT_LLM_ROOT: ${TRT_LLM_ROOT}")
@@ -52,6 +53,8 @@ target_link_libraries(${PROJECT_NAME}
         ${TRT_LLM_LIB}
         ${TRT_LLM_PLUGIN_LIB}
 )
+
+add_subdirectory(bindings)
 
 add_executable(test_vlm_sync tests/test_vlm_sync.cpp)
 target_link_libraries(test_vlm_sync PRIVATE ${PROJECT_NAME})
