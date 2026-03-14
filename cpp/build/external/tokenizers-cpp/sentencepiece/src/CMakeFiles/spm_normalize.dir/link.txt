@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -Wall -fPIC  -fmacro-prefix-map=/home/pi/kx/pt2engine_vlm/cpp/='' CMakeFiles/spm_normalize.dir/spm_normalize_main.cc.o -o spm_normalize  libsentencepiece.a libsentencepiece_train.a libsentencepiece.a -latomic 

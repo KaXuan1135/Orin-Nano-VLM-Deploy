@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -Wall -fPIC  -fmacro-prefix-map=/home/pi/kx/pt2engine_vlm/cpp/='' CMakeFiles/spm_decode.dir/spm_decode_main.cc.o -o spm_decode  libsentencepiece.a -latomic 
