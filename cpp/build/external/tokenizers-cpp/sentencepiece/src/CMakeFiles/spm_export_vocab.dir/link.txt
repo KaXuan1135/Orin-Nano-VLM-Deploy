@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -Wall -fPIC  -fmacro-prefix-map=/home/pi/kx/pt2engine_vlm/cpp/='' CMakeFiles/spm_export_vocab.dir/spm_export_vocab_main.cc.o -o spm_export_vocab  libsentencepiece.a -latomic 

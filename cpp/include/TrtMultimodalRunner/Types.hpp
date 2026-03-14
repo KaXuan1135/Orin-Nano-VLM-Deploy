@@ -121,7 +121,8 @@ struct GenerateResult {
     std::vector<std::vector<int32_t>> outputs_tokens; // beams of output tokens
     std::vector<std::string> outputs_text; // beams of output text
 
-    std::vector<std::vector<int32_t>> last_outputs_token; // last output tokens (probably not only one, so still nested vector), for streaming purpose
+    mutable std::mutex data_mutex;
+    std::vector<std::vector<int32_t>> last_outputs_token; // last output tokens (the user should clean it after reading), for streaming purpose
     std::vector<std::string> last_outputs_text;
 
     int32_t input_tokens_len() const {
@@ -265,7 +266,19 @@ struct VisGenHandle {
     VisualFeatures visual_features;
     GenerateResult generate_result;
 
-    mutable std::mutex data_mutex;
+    std::vector<std::string> pop_last_outputs_text() {
+        std::lock_guard<std::mutex> lock(generate_result.data_mutex);
+        std::vector<std::string> result = generate_result.last_outputs_text; // 拷贝一份
+
+        for (auto& beam : generate_result.last_outputs_token) {
+            beam.clear();
+        }
+
+        generate_result.last_outputs_text.clear();
+        generate_result.last_outputs_text.resize(result.size()); 
+        return result;
+    }
+
 };
 using SharedVisGenHandle = std::shared_ptr<VisGenHandle>;
 

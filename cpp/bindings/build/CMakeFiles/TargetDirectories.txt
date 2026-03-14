@@ -1,0 +1,3 @@
+/home/pi/kx/pt2engine_vlm/cpp/bindings/build/CMakeFiles/my_engine_binding.dir
+/home/pi/kx/pt2engine_vlm/cpp/bindings/build/CMakeFiles/edit_cache.dir
+/home/pi/kx/pt2engine_vlm/cpp/bindings/build/CMakeFiles/rebuild_cache.dir

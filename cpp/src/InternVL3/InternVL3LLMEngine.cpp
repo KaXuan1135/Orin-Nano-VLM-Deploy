@@ -152,7 +152,8 @@ std::vector<std::string> InternVL3LLMEngine::decode_outputs(
                 current_beam.begin() + input_len, 
                 current_beam.end()
             );
-            results[m] = strip(tokenizer->Decode(output_ids));
+            // results[m] = strip(tokenizer->Decode(output_ids));
+            results[m] = tokenizer->Decode(output_ids);
         }
     }
 
@@ -231,7 +232,7 @@ void InternVL3LLMEngine::batch_generate_from_features(
         res.user_prompt = user_prompts[b];
         res.input_tokens = input_ids;
         res.outputs_tokens.resize(m_config.max_beam_width);
-        // res.last_outputs_token.resize(m_config.max_beam_width);
+        res.last_outputs_token.resize(m_config.max_beam_width);
         res.start_gen = std::chrono::high_resolution_clock::now();
         
         if (config.streaming) {
@@ -531,23 +532,35 @@ void InternVL3LLMEngine::update_response(
             if (time_to_first_token_run) break;
         }
         auto const& result = resp.getResult();
-        if (res->gen_config.streaming) {
-            // Streaming, the llm_engine only return result of output tokens
-            for (size_t beam_idx = 0; beam_idx < result.outputTokenIds.size(); ++beam_idx) {
-                auto const& tokens = result.outputTokenIds[beam_idx];
-                for (auto tokenId : tokens) {
-                    res->outputs_tokens[beam_idx].push_back(static_cast<int>(tokenId));
+
+        {
+            std::lock_guard<std::mutex> lock(res->data_mutex);
+
+            if (res->gen_config.streaming) {
+                // Streaming, the llm_engine only return result of output tokens
+                for (size_t beam_idx = 0; beam_idx < result.outputTokenIds.size(); ++beam_idx) {
+                    auto const& tokens = result.outputTokenIds[beam_idx];
+                    for (auto tokenId : tokens) {
+                        res->outputs_tokens[beam_idx].push_back(static_cast<int>(tokenId));
+                        res->last_outputs_token[beam_idx].push_back(static_cast<int>(tokenId));
+                    }
+                }
+            } else {
+                // Non-Streaming, the llm_engine return result of input + output tokens
+                for (size_t beam_idx = 0; beam_idx < result.outputTokenIds.size(); ++beam_idx) {
+                    auto const& tokens = result.outputTokenIds[beam_idx];
+                    for (size_t i = res->input_tokens_len(); i < tokens.size(); ++i) {
+                        res->outputs_tokens[beam_idx].push_back(static_cast<int>(tokens[i]));
+                        res->last_outputs_token[beam_idx].push_back(static_cast<int>(tokens[i]));
+                    }
                 }
             }
-        } else {
-            // Non-Streaming, the llm_engine return result of input + output tokens
-            for (size_t beam_idx = 0; beam_idx < result.outputTokenIds.size(); ++beam_idx) {
-                auto const& tokens = result.outputTokenIds[beam_idx];
-                for (size_t i = res->input_tokens_len(); i < tokens.size(); ++i) {
-                    res->outputs_tokens[beam_idx].push_back(static_cast<int>(tokens[i]));
-                }
-            }
+            res->last_outputs_text = decode_outputs(
+                res->last_outputs_token,
+                0
+            );
         }
+
 
         if (result.isFinal && !time_to_first_token_run) {
             res->done_output.store(true);

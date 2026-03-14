@@ -4,6 +4,7 @@
 #include <opencv2/opencv.hpp>
 #include "TrtMultimodalRunner/IMultimodalRunner.hpp"
 #include "TrtMultimodalRunner/InternVL3/InternVL3Runner.hpp"
+#include "TrtMultimodalRunner/InternVL3/AsyncInternVL3Runner.hpp"
 
 namespace py = pybind11;
 using namespace trt_multimodal;
@@ -34,6 +35,23 @@ std::vector<trt_multimodal::GenerateResult> py_batch_generate(
     return results;
 }
 
+SharedVisGenHandle py_enqueue_generate(
+    trt_multimodal::AsyncInternVL3Runner& runner,
+    const std::vector<std::vector<py::array_t<uint8_t>>>& py_images,
+    const std::vector<std::string>& user_prompt,
+    const std::vector<trt_multimodal::GenerateConfig>& gen_config
+) {
+    std::vector<std::vector<cv::Mat>> images;
+    for (const auto& row : py_images) {
+        std::vector<cv::Mat> mat_row;
+        for (const auto& arr : row) mat_row.push_back(numpy_to_mat(arr));
+        images.push_back(mat_row);
+    }
+
+    return runner.enqueue_generate(images[0], user_prompt[0], gen_config[0]);
+}
+
+
 // --- 绑定逻辑 (必须放在这里面！) ---
 PYBIND11_MODULE(my_engine_binding, m) {
     m.doc() = "High-performance AI Engine Bindings";
@@ -42,7 +60,8 @@ PYBIND11_MODULE(my_engine_binding, m) {
     py::class_<trt_multimodal::GenerateConfig>(m, "GenerateConfig")
         .def(py::init<>())
         .def_readwrite("max_new_tokens", &trt_multimodal::GenerateConfig::max_new_tokens)
-        .def_readwrite("temperature", &trt_multimodal::GenerateConfig::temperature);
+        .def_readwrite("temperature", &trt_multimodal::GenerateConfig::temperature)
+        .def_readwrite("streaming", &trt_multimodal::GenerateConfig::streaming);
 
     // 绑定 GenerateResult
     py::class_<trt_multimodal::GenerateResult>(m, "GenerateResult")
@@ -70,11 +89,18 @@ PYBIND11_MODULE(my_engine_binding, m) {
     py::class_<InternVL3Runner>(m, "InternVL3Runner")
         .def(py::init<const ModelConfig&>()) // 这一行直接匹配了 C++ 的构造函数
         .def("batch_generate", &py_batch_generate); 
+ 
+    py::class_<AsyncInternVL3Runner>(m, "AsyncInternVL3Runner")
+        .def(py::init<const ModelConfig&>())
+        .def("enqueue_generate", &py_enqueue_generate);
 
-    // py::class_<InternVL3Runner>(m, "InternVL3Runner")
-    //     .def(py::init<const ModelConfig&>())
-    //     // 关键点：这一行把你的包装函数绑定到了类的方法上
-    //     // pybind11 会自动把第一个参数 runner 作为 self (实例对象) 传入
-    //     
+    py::class_<VisGenHandle, SharedVisGenHandle>(m, "VisGenHandle")
+        // 使用 getter 暴露状态，避免直接暴露 std::atomic
+        .def_property_readonly("vis_finished", [](const VisGenHandle& h) { return h.vis_finished.load(); })
+        .def_property_readonly("gen_finished", [](const VisGenHandle& h) { return h.gen_finished.load(); })
+        
+        // 关键：不要用 def_readwrite 暴露 last_outputs_text，必须用互斥锁保护的方法
+        .def("pop_last_outputs_text", &VisGenHandle::pop_last_outputs_text);
+
 
 }
