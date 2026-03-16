@@ -478,13 +478,12 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
     }
 
     if (handle->prev_handles.size() > 0) {
-        for (auto const& prev_handle : handle->prev_handles) {
-            for (auto const& tid : prev_handle->generate_result.input_tokens) {
-                input_ids.push_back(static_cast<int32_t>(tid));
-            }
-            for (auto const& tid: prev_handle->generate_result.outputs_tokens[0]) { // consider only beams 0 now
-                input_ids.push_back(static_cast<int32_t>(tid));
-            }
+        auto const& prev_handle = handle->prev_handles[handle->prev_handles.size() - 1];
+        for (auto const& tid : prev_handle->generate_result.input_tokens) {
+            input_ids.push_back(static_cast<int32_t>(tid));
+        }
+        for (auto const& tid: prev_handle->generate_result.outputs_tokens[0]) { // consider only beams 0 now
+            input_ids.push_back(static_cast<int32_t>(tid));
         }
         std::cout << input_ids.size() << " of history being inherited" << std::endl;
     }
@@ -506,6 +505,9 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
     std::vector<int32_t> post_prompt_tokens = tokenizer->Encode(post_prompt);
     for (auto tid : post_prompt_tokens) input_ids.push_back(static_cast<int32_t>(tid));
     
+    
+
+
     tle::Request request = create_request_from_dict(
         input_ids,
         vis_features,

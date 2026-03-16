@@ -47,7 +47,7 @@ assert (MOE_PLUGIN := 'disable') in ['auto', 'float16', 'float32', 'bfloat16' , 
 assert (PAGED_KV_CACHE := 'enable') in ['enable', 'disable']
 assert (MAMBA_CONV1D_PLUGIN := 'disable') in ['auto', 'float16', 'float32', 'bfloat16', 'int32', 'disable']
 assert (GPT_ATTENTION_PLUGIN := 'auto') in ['auto', 'float16', 'float32', 'bfloat16', 'int32', 'disable']
-assert (REMOVE_INPUT_PADDING := 'disable') in ['enable', 'disable'] # reduddant in batch size == 1 scenario
+assert (REMOVE_INPUT_PADDING := 'enable') in ['enable', 'disable'] # enable for cpp, disable for python
 
 def monitor_memory(proc, results):
     """Monitors the memory usage of a process and all its children."""
