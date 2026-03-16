@@ -266,6 +266,8 @@ struct VisGenHandle {
     VisualFeatures visual_features;
     GenerateResult generate_result;
 
+    std::vector<std::shared_ptr<VisGenHandle>> prev_handles; //temp solution
+
     std::vector<std::string> pop_last_outputs_text() {
         std::lock_guard<std::mutex> lock(generate_result.data_mutex);
         std::vector<std::string> result = generate_result.last_outputs_text; // 拷贝一份

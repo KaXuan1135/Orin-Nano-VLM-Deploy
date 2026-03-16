@@ -17,29 +17,30 @@ cv::Mat numpy_to_mat(py::array_t<uint8_t> arr) {
     return mat.clone();
 }
 
-std::vector<trt_multimodal::GenerateResult> py_batch_generate(
-    trt_multimodal::InternVL3Runner& runner,
-    const std::vector<std::vector<py::array_t<uint8_t>>>& py_images,
-    const std::vector<std::string>& user_prompt,
-    const std::vector<trt_multimodal::GenerateConfig>& gen_config
-) {
-    std::vector<std::vector<cv::Mat>> images;
-    for (const auto& row : py_images) {
-        std::vector<cv::Mat> mat_row;
-        for (const auto& arr : row) mat_row.push_back(numpy_to_mat(arr));
-        images.push_back(mat_row);
-    }
+// std::vector<trt_multimodal::GenerateResult> py_batch_generate(
+//     trt_multimodal::InternVL3Runner& runner,
+//     const std::vector<std::vector<py::array_t<uint8_t>>>& py_images,
+//     const std::vector<std::string>& user_prompt,
+//     const std::vector<trt_multimodal::GenerateConfig>& gen_config
+// ) {
+//     std::vector<std::vector<cv::Mat>> images;
+//     for (const auto& row : py_images) {
+//         std::vector<cv::Mat> mat_row;
+//         for (const auto& arr : row) mat_row.push_back(numpy_to_mat(arr));
+//         images.push_back(mat_row);
+//     }
     
-    std::vector<trt_multimodal::GenerateResult> results;
-    runner.batch_generate(images, user_prompt, gen_config, results);
-    return results;
-}
+//     std::vector<trt_multimodal::GenerateResult> results;
+//     runner.batch_generate(images, user_prompt, gen_config, results);
+//     return results;
+// }
 
-SharedVisGenHandle py_enqueue_generate(
+SharedVisGenHandle py_enqueue_chat(
     trt_multimodal::AsyncInternVL3Runner& runner,
     const std::vector<std::vector<py::array_t<uint8_t>>>& py_images,
     const std::vector<std::string>& user_prompt,
-    const std::vector<trt_multimodal::GenerateConfig>& gen_config
+    const std::vector<trt_multimodal::GenerateConfig>& gen_config,
+    const std::vector<SharedVisGenHandle>& prev_handles
 ) {
     std::vector<std::vector<cv::Mat>> images;
     for (const auto& row : py_images) {
@@ -48,7 +49,7 @@ SharedVisGenHandle py_enqueue_generate(
         images.push_back(mat_row);
     }
 
-    return runner.enqueue_generate(images[0], user_prompt[0], gen_config[0]);
+    return runner.enqueue_generate(images[0], user_prompt[0], gen_config[0], prev_handles);
 }
 
 
@@ -86,13 +87,13 @@ PYBIND11_MODULE(my_engine_binding, m) {
         .def_readwrite("embedding_dim", &ModelConfig::embedding_dim);
 
     // 3. 绑定 Runner (这里直接接受 ModelConfig 对象)
-    py::class_<InternVL3Runner>(m, "InternVL3Runner")
-        .def(py::init<const ModelConfig&>()) // 这一行直接匹配了 C++ 的构造函数
-        .def("batch_generate", &py_batch_generate); 
+    // py::class_<InternVL3Runner>(m, "InternVL3Runner")
+    //     .def(py::init<const ModelConfig&>()) // 这一行直接匹配了 C++ 的构造函数
+    //     .def("batch_generate", &py_batch_generate); 
  
     py::class_<AsyncInternVL3Runner>(m, "AsyncInternVL3Runner")
         .def(py::init<const ModelConfig&>())
-        .def("enqueue_generate", &py_enqueue_generate);
+        .def("enqueue_chat", &py_enqueue_chat);
 
     py::class_<VisGenHandle, SharedVisGenHandle>(m, "VisGenHandle")
         // 使用 getter 暴露状态，避免直接暴露 std::atomic

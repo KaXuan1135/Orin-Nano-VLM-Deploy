@@ -21,10 +21,18 @@ public:
 
     ~AsyncInternVL3Runner() override;
 
+    SharedVisGenHandle enqueue_chat(
+        const std::vector<cv::Mat>& images, 
+        const std::string& user_prompt,
+        const GenerateConfig& gen_config,
+        const std::vector<SharedVisGenHandle>& prev_handles
+    );
+
     SharedVisGenHandle enqueue_generate(
         const std::vector<cv::Mat>& images, 
         const std::string& user_prompt,
-        const GenerateConfig& gen_config
+        const GenerateConfig& gen_config,
+        const std::vector<SharedVisGenHandle>& prev_handles = {} // temp solution
     ) override;
 
     SharedVisGenHandle enqueue_extract_visual_features(

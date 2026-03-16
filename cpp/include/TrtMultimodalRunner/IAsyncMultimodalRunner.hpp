@@ -22,7 +22,8 @@ public:
     virtual SharedVisGenHandle enqueue_generate(
         const std::vector<cv::Mat>& images, 
         const std::string& user_prompt,
-        const GenerateConfig& gen_config
+        const GenerateConfig& gen_config,
+        const std::vector<SharedVisGenHandle>& prev_handles = {} // temp solution
     ) = 0; 
 
     virtual SharedVisGenHandle enqueue_extract_visual_features(

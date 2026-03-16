@@ -22,16 +22,32 @@ AsyncInternVL3Runner::~AsyncInternVL3Runner()
     cudaDeviceSynchronize();
 }
 
-SharedVisGenHandle AsyncInternVL3Runner::enqueue_generate(
+SharedVisGenHandle AsyncInternVL3Runner::enqueue_chat(
     const std::vector<cv::Mat>& images, 
     const std::string& user_prompt,
-    const GenerateConfig& gen_config) 
+    const GenerateConfig& gen_config,
+    const std::vector<SharedVisGenHandle>& prev_handles) 
 {
     SharedVisGenHandle handle = enqueue_extract_visual_features(images, gen_config);
     handle->llm_task_id = llm_rid++;
     handle->do_llm.store(true);
     handle->generate_result.gen_config = gen_config;
     handle->generate_result.user_prompt = user_prompt;
+    return handle;
+}
+
+SharedVisGenHandle AsyncInternVL3Runner::enqueue_generate(
+    const std::vector<cv::Mat>& images, 
+    const std::string& user_prompt,
+    const GenerateConfig& gen_config,
+    const std::vector<SharedVisGenHandle>& prev_handles) // temp solution
+{
+    SharedVisGenHandle handle = enqueue_extract_visual_features(images, gen_config);
+    handle->llm_task_id = llm_rid++;
+    handle->do_llm.store(true);
+    handle->generate_result.gen_config = gen_config;
+    handle->generate_result.user_prompt = user_prompt;
+    handle->prev_handles = prev_handles;
     return handle;
 }
 

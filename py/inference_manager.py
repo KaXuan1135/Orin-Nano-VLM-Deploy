@@ -11,6 +11,7 @@ class InferenceManager:
         config.tokenizer_path = "/home/pi/kx/pt2engine_vlm/models/InternVL3-1B_i8/tokenizers/tokenizer.json"
         config.max_vis_batch = 6
         self.runner = self.engine.AsyncInternVL3Runner(config)
+        self.previous_handles = {}
 
     def stream_infer(self, message, image_data, session_id):
         """
@@ -27,7 +28,14 @@ class InferenceManager:
         gen_config = self.engine.GenerateConfig()
         gen_config.streaming = True
 
-        handle = self.runner.enqueue_generate([images], [message], [gen_config])
+        if session_id not in self.previous_handles.keys():
+            self.previous_handles[session_id] = []
+
+        handle = self.runner.enqueue_chat([images], [message], [gen_config], self.previous_handles[session_id])
+        if session_id in self.previous_handles.keys():
+            self.previous_handles[session_id].append(handle)
+        else:
+            self.previous_handles[session_id] = [handle]
         
         full_text = ""
         while not handle.gen_finished:

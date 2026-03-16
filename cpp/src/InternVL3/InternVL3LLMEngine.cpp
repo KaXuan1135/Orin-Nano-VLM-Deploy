@@ -5,6 +5,7 @@
 #include <fstream>
 #include <cassert>
 #include <iostream>
+#include <algorithm>
 #include <nlohmann/json.hpp>
 
 #include "tensorrt_llm/plugins/api/tllmPlugin.h"
@@ -432,8 +433,18 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
     SharedVisGenHandle& handle
 ) {
 
-    //Construct Input Prompts
-    std::string pre_prompt = "<|im_start|>system\n" + gen_config.system_prompt + "<|im_end|>\n<|im_start|>user\n";
+    if (handle->prev_handles.size() > 0) {
+        std::cout << "Has prev" << std::endl;
+    } else {
+        std::cout << "No prev" << std::endl;
+    }
+
+    std::string pre_prompt;
+    if (handle->prev_handles.size() > 0) {
+        pre_prompt = "<|im_end|>\n<|im_start|>user\n";
+    } else {
+        pre_prompt = "<|im_start|>system\n" + gen_config.system_prompt + "<|im_end|>\n<|im_start|>user\n";
+    }
     std::string post_prompt = "\n" + user_prompt + "<|im_end|>\n<|im_start|>assistant\n";
 
     std::vector<std::string> images_prefix(vis_features.total_patches());
@@ -455,6 +466,28 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
     //Constuct Input Ids, Replace Image Token with fake tokens
     std::vector<int32_t> input_ids;
     size_t cur_fake_id = tokenizer->GetVocabSize();
+    std::cout << "If consider only this chat, the vocab size is " << cur_fake_id << std::endl;
+
+    if (handle->prev_handles.size() > 0) {
+        for (auto const& prev_handle : handle->prev_handles) {
+            for (auto const& tid : prev_handle->generate_result.input_tokens) {
+                cur_fake_id = std::max(static_cast<long>(cur_fake_id), static_cast<long>(tid));
+            }
+        }
+        std::cout << "If consider previous chats, the vocab size is " << cur_fake_id << std::endl;
+    }
+
+    if (handle->prev_handles.size() > 0) {
+        for (auto const& prev_handle : handle->prev_handles) {
+            for (auto const& tid : prev_handle->generate_result.input_tokens) {
+                input_ids.push_back(static_cast<int32_t>(tid));
+            }
+            for (auto const& tid: prev_handle->generate_result.outputs_tokens[0]) { // consider only beams 0 now
+                input_ids.push_back(static_cast<int32_t>(tid));
+            }
+        }
+        std::cout << input_ids.size() << " of history being inherited" << std::endl;
+    }
 
     std::vector<int32_t> pre_prompt_tokens = tokenizer->Encode(pre_prompt);
     for (auto tid : pre_prompt_tokens) input_ids.push_back(static_cast<int32_t>(tid));
