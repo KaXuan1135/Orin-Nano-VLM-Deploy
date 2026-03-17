@@ -101,7 +101,7 @@ void AsyncInternVL3Runner::worker_loop(
                     m_queue_vis_tasks.pop_front();
                     
                     m_inflight_vis_tasks[handle->vis_task_id] = handle;
-                    m_sync_runner.vis_engine.enqueue_extract_visual_features(
+                    m_sync_runner.vis_engine->enqueue_extract_visual_features(
                         handle->visual_features.images, 
                         handle->visual_features.gen_config, 
                         handle);
@@ -138,7 +138,7 @@ void AsyncInternVL3Runner::worker_loop(
                     m_queue_llm_tasks.pop_front();
                     
                     m_inflight_llm_tasks[handle->llm_task_id] = handle;
-                    m_sync_runner.llm_engine.enqueue_generate_from_features(
+                    m_sync_runner.llm_engine->enqueue_generate_from_features(
                         handle->visual_features, 
                         handle->generate_result.user_prompt, 
                         handle->generate_result.gen_config, 
@@ -157,14 +157,15 @@ void AsyncInternVL3Runner::worker_loop(
                 gen_results.push_back(&(handle->generate_result));
             }
         }
-        m_sync_runner.llm_engine.update_response(gen_results, 1000, false);
+        m_sync_runner.llm_engine->update_response(gen_results, 1000, false);
 
         {   // LLM : Done -> Removed
             std::lock_guard<std::mutex> lock(m_map_mutex);
             for (auto it = m_inflight_llm_tasks.begin(); it != m_inflight_llm_tasks.end(); ) {
                 auto& handle = it->second;
                 
-                if (handle->generate_result.done_output.load()) {
+                // if (handle->generate_result.done_output.load()) {
+                if (handle->generate_result.done_output) {
                     handle->gen_finished.store(true);
                     it = m_inflight_llm_tasks.erase(it);
                 } else {

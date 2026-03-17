@@ -9,20 +9,10 @@
 
 int main(int argc, char** argv) {
 
-    std::string model_path =  "/mnt/sdcard/models/InternVL3-1B_i8";
-
-    trt_multimodal::ModelConfig m_config = trt_multimodal::ModelConfig();
-    m_config.model_type = trt_multimodal::ModelType::Type::INTERNVL3;
-
-    m_config.llm_engine_path = model_path + "/InternVL3-1B_llm_engine";
-    m_config.vis_engine_path = model_path + "/InternVL3-1B_vis_engine/model.engine";
-    m_config.tokenizer_path = model_path + "/tokenizers/tokenizer.json";
-
-    m_config.max_beam_width = 1;
-    m_config.max_llm_batch = 20;
-    m_config.max_vis_batch = 6;
-    m_config.patch_token_size = 256;
-    m_config.embedding_dim = 896;
+    trt_multimodal::ModelConfig m_config = trt_multimodal::ModelConfig(
+        trt_multimodal::ModelType::Type::INTERNVL3,
+        "/mnt/sdcard/models/InternVL3-1B_i8"
+    );
 
     trt_multimodal::GenerateConfig gen_config = trt_multimodal::GenerateConfig();
     gen_config.system_prompt = "你是由上海人工智能实验室联合商汤科技开发的书生多模态大模型, 英文名叫InternVL, 是一个有用无害的人工智能助手。";
@@ -70,7 +60,7 @@ int main(int argc, char** argv) {
 
     auto all_gen_start = std::chrono::high_resolution_clock::now();
 
-    runner->batch_generate(
+    runner->generate(
         batch_frames,
         batch_prompts,
         batch_configs,

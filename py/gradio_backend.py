@@ -5,13 +5,12 @@ import cv2
 class InferenceManager:
     def __init__(self, engine_module):
         self.engine = engine_module
-        config = self.engine.ModelConfig()
-        config.llm_engine_path = "/mnt/sdcard/models/InternVL3-1B_i8/InternVL3-1B_llm_engine"
-        config.vis_engine_path = "/mnt/sdcard/models/InternVL3-1B_i8/InternVL3-1B_vis_engine/model.engine"
-        config.tokenizer_path = "/mnt/sdcard/models/InternVL3-1B_i8/tokenizers/tokenizer.json"
-        config.max_vis_batch = 6
+        config = self.engine.ModelConfig(
+            self.engine.ModelType.INTERNVL3,
+            '/mnt/sdcard/models/InternVL3-1B_i8/'
+        )
         self.runner = self.engine.AsyncInternVL3Runner(config)
-        self.previous_handles = {}
+        self.reset_history()
 
     def reset_history(self):
         self.previous_handles = {}

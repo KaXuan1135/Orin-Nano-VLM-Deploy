@@ -15,35 +15,15 @@ public:
 
     ~InternVL3Runner() override;
 
-    void batch_generate(
+    void generate(
         const std::vector<std::vector<cv::Mat>>& images, 
         const std::vector<std::string>& user_prompt,
         const std::vector<GenerateConfig>& gen_config,
         std::vector<GenerateResult>& gen_result
     ) override;
 
-    void generate(
-        const std::vector<cv::Mat>& images, 
-        const std::string& user_prompt,
-        const GenerateConfig& gen_config,
-        GenerateResult& gen_result
-    ) override;
-
-    void extract_visual_features(
-        const std::vector<cv::Mat>& images,
-        const GenerateConfig& gen_config,
-        VisualFeatures& vis_feats
-    ) override;
-
-    void generate_from_features(
-        const VisualFeatures& visual_features,
-        const std::string& user_prompt,
-        const GenerateConfig& gen_config,
-        GenerateResult& gen_result
-    ) override;
-
-    InternVL3VisionEngine vis_engine;
-    InternVL3LLMEngine llm_engine;
+    std::unique_ptr<InternVL3VisionEngine> vis_engine;
+    std::unique_ptr<InternVL3LLMEngine> llm_engine;
 
 private:
 

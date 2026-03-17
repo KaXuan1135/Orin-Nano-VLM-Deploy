@@ -40,7 +40,8 @@ RUN ln -s /usr/bin/gcc /usr/bin/aarch64-unknown-linux-gnu-gcc && \
     ln -s /usr/bin/ar /usr/bin/aarch64-unknown-linux-gnu-ar
 
 # shoudl move this to top section
-RUN apt-get update && apt-get install -y nlohmann-json3-dev
+RUN apt-get update && apt-get install -y nlohmann-json3-dev pybind11-dev
+RUN pip install gradio
 
 # # --- Runtime ---
 # FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0

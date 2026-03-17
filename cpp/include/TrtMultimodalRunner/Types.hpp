@@ -3,7 +3,10 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <fstream>
 #include <numeric>
+#include <filesystem>
+#include <nlohmann/json.hpp>
 #include <opencv2/opencv.hpp>
 
 namespace trt_multimodal {
@@ -54,15 +57,35 @@ struct ModelConfig {
     std::string vis_engine_path = "";
     std::string tokenizer_path = "";
 
-    int32_t max_beam_width = 1;
-    int32_t max_llm_batch = 1;
-    int32_t max_vis_batch = 1;
-    int32_t patch_token_size = 256;
-    int32_t embedding_dim = 896;
+    int32_t max_beam_width = -1;
+    int32_t max_llm_batch = -1;
+    int32_t max_input_len = -1;
+    int32_t embedding_dim = -1;
 
-    // TODO: more to add
-    //最大 Batch Size。
-    //最大 Context 长度。
+    int32_t max_vis_batch = -1;
+    int32_t patch_token_size = 256; // TODO : where can i extract get patch token size?
+
+    ModelConfig(
+        ModelType::Type m_type,
+        std::string m_path
+    ) : model_type(m_type) {
+        std::filesystem::path base(m_path);
+        llm_engine_path = (base / "llm_engine").string();
+        vis_engine_path = (base / "vis_engine" / "model.engine").string();
+        tokenizer_path = (base / "tokenizers" / "tokenizer.json").string();
+
+        std::ifstream f_llm((base / "llm_engine" / "config.json").string());
+        nlohmann::json config = nlohmann::json::parse(f_llm);
+        max_beam_width = config["build_config"]["max_beam_width"];
+        max_llm_batch = config["build_config"]["max_batch_size"];
+        max_input_len = config["build_config"]["max_input_len"];
+        embedding_dim = config["pretrained_config"]["hidden_size"];
+
+        std::ifstream f_vis((base / "vis_engine" / "config.json").string());
+        config = nlohmann::json::parse(f_vis);
+        max_vis_batch = config["builder_config"]["vis_batch_size"];
+        // TODO : where can i extract get patch token size?
+    };
 
 };
 
@@ -77,13 +100,11 @@ struct GenerateConfig {
     float repetition_penalty = 1.0f;
     bool streaming = false;
 
-    // TODO: more to add
     int32_t min_patch = 1;
     int32_t max_patch = 1;
     int32_t patch_size = 448;
     bool use_thumbnail = false;
 
-    //Profiling
     bool profiling = false;
 };
 
@@ -108,6 +129,42 @@ struct VisualFeatures {
 };
 
 struct GenerateResult {
+
+    GenerateResult() = default;
+
+    GenerateResult& operator=(GenerateResult&& other) noexcept {
+        if (this != &other) {
+            gen_config = std::move(other.gen_config);
+            request_id = other.request_id;
+            ttft_request_id = other.ttft_request_id;
+            system_prompt = std::move(other.system_prompt);
+            user_prompt = std::move(other.user_prompt);
+            input_tokens = std::move(other.input_tokens);
+            outputs_tokens = std::move(other.outputs_tokens);
+            outputs_text = std::move(other.outputs_text);
+            last_outputs_token = std::move(other.last_outputs_token);
+            last_outputs_text = std::move(other.last_outputs_text);
+            full_stops = std::move(other.full_stops);
+            error_msg = std::move(other.error_msg);
+            
+            done_output = other.done_output;
+            has_error = other.has_error;
+            first_token_captured.store(other.first_token_captured.load());
+
+            start_gen = other.start_gen;
+            end_gen = other.end_gen;
+            start_ttft = other.start_ttft;
+            end_ttft = other.end_ttft;
+        }
+        return *this;
+    }
+
+    GenerateResult(GenerateResult&& other) noexcept {
+        *this = std::move(other);
+    }
+
+    GenerateResult(const GenerateResult&) = delete;
+    GenerateResult& operator=(const GenerateResult&) = delete;
 
     GenerateConfig gen_config;
 
@@ -137,11 +194,11 @@ struct GenerateResult {
         return outputs_tokens_len;
     }
 
-    std::atomic<bool> done_output{false}; // For Asynchonize output, determine if this result is complete.
+    bool done_output = false; // determine if this result is complete.
     std::vector<bool> full_stops; // True if model did complete output for each beam, False if stop because of max_new tokens reach limit
     
+    bool has_error = false;
     std::string error_msg;
-    std::atomic<bool> has_error{false};
 
     // Only Return if Generate Config :: profiling == true
     std::chrono::high_resolution_clock::time_point start_gen;
@@ -149,72 +206,6 @@ struct GenerateResult {
     std::chrono::high_resolution_clock::time_point start_ttft;
     std::chrono::high_resolution_clock::time_point end_ttft;
     std::atomic<bool> first_token_captured{false};
-
-    // --- NEW: Add these to allow use in std::vector ---
-
-    // 1. Default Constructor (Required for resize/emplace)
-    GenerateResult() = default;
-
-    // 2. Move Constructor
-    // We manually move strings/vectors and load() the atomic values
-    GenerateResult(GenerateResult&& other) noexcept {
-        gen_config = std::move(other.gen_config);
-        request_id = other.request_id;
-        ttft_request_id = other.ttft_request_id;
-        system_prompt = std::move(other.system_prompt);
-        user_prompt = std::move(other.user_prompt);
-        input_tokens = std::move(other.input_tokens);
-        outputs_tokens = std::move(other.outputs_tokens);
-        outputs_text = std::move(other.outputs_text);
-        last_outputs_token = std::move(other.last_outputs_token);
-        last_outputs_text = std::move(other.last_outputs_text);
-        full_stops = std::move(other.full_stops);
-        error_msg = std::move(other.error_msg);
-        
-        // Atomics must be loaded and stored
-        done_output.store(other.done_output.load());
-        has_error.store(other.has_error.load());
-        first_token_captured.store(other.first_token_captured.load());
-
-        start_gen = other.start_gen;
-        end_gen = other.end_gen;
-        start_ttft = other.start_ttft;
-        end_ttft = other.end_ttft;
-    }
-
-    // 3. Move Assignment
-    GenerateResult& operator=(GenerateResult&& other) noexcept {
-        if (this != &other) {
-            gen_config = std::move(other.gen_config);
-            request_id = other.request_id;
-            ttft_request_id = other.ttft_request_id;
-            system_prompt = std::move(other.system_prompt);
-            user_prompt = std::move(other.user_prompt);
-            input_tokens = std::move(other.input_tokens);
-            outputs_tokens = std::move(other.outputs_tokens);
-            outputs_text = std::move(other.outputs_text);
-            last_outputs_token = std::move(other.last_outputs_token);
-            last_outputs_text = std::move(other.last_outputs_text);
-            full_stops = std::move(other.full_stops);
-            error_msg = std::move(other.error_msg);
-            
-            done_output.store(other.done_output.load());
-            has_error.store(other.has_error.load());
-            first_token_captured.store(other.first_token_captured.load());
-
-            start_gen = other.start_gen;
-            end_gen = other.end_gen;
-            start_ttft = other.start_ttft;
-            end_ttft = other.end_ttft;
-        }
-        return *this;
-    }
-
-    // 4. Explicitly Delete Copy (Since atomics can't be copied)
-    GenerateResult(const GenerateResult&) = delete;
-    GenerateResult& operator=(const GenerateResult&) = delete;
-
-
 
     double generation_latency_ms() const {
         if (!gen_config.profiling) return 0.0;
@@ -225,7 +216,6 @@ struct GenerateResult {
         if (!gen_config.profiling) return 0.0;
         return std::chrono::duration<double, std::milli>(end_ttft - start_ttft).count();
     }
-
 
     std::vector<int32_t> total_tokens() const {
         std::vector<int32_t> total_tokens;

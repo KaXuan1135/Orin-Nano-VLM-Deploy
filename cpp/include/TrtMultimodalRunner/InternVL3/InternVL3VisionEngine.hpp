@@ -9,10 +9,10 @@ namespace trt_multimodal {
 class InternVL3VisionEngine {
 public:
 
-    int init(
+    InternVL3VisionEngine(
         const ModelConfig& config,
         const cudaStream_t& stream
-    );    
+    );
 
     void extract_visual_features(
         const std::vector<cv::Mat>& images,

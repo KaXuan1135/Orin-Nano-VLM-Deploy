@@ -402,9 +402,9 @@ def main(args):
     MODEL_OUTPUT_PATH = f"/mnt/sdcard/models/{args.model_name}{precision_suffix}"
     os.makedirs(MODEL_OUTPUT_PATH, exist_ok=True)
     
-    ONNX_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/{args.model_name}_vis.onnx")
-    VIS_ENGINE_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/{args.model_name}_vis_engine")
-    LLM_ENGINE_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/{args.model_name}_llm_engine")
+    ONNX_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/vis.onnx")
+    VIS_ENGINE_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/vis_engine")
+    LLM_ENGINE_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/llm_engine")
     TKN_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/tokenizers")
 
     vis2onnx_build = {'skip': False, 'peak_rss_gb': 0, 'peak_vms_gb': 0, 'elapsed_time': 0}
