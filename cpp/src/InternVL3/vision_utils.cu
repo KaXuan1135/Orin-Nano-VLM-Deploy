@@ -39,7 +39,7 @@ extern "C" void launch_fp32_to_fp16(const void* input, void* output, size_t n, c
     );
 }
 
-// 完成 Resize + Normalize + HWC2CHW + TypeCast
+// Resize + Normalize + HWC2CHW + TypeCast
 __global__ void vlm_preprocess_bilinear_kernel(
     const uint8_t* src, __half* dest,
     int src_w, int src_h, int patch_size,
@@ -51,21 +51,17 @@ __global__ void vlm_preprocess_bilinear_kernel(
     int dy = blockIdx.y * blockDim.y + threadIdx.y;
 
     if (dx < patch_size && dy < patch_size) {
-        // 计算目标像素对应原图的浮点坐标
         float sx = (float)dx * crop_w / patch_size + crop_x;
         float sy = (float)dy * crop_h / patch_size + crop_y;
 
-        // 找到周围的 4 个像素坐标
         int x0 = (int)floorf(sx);
         int y0 = (int)floorf(sy);
         int x1 = min(x0 + 1, src_w - 1);
         int y1 = min(y0 + 1, src_h - 1);
 
-        // 计算插值权重
         float u = sx - x0;
         float v = sy - y0;
 
-        // 读取 4 个点的 RGB 并进行线性插值
         auto get_pixel = [&](int x, int y, int c) {
             return (float)src[(y * src_w + x) * 3 + c];
         };
@@ -77,7 +73,6 @@ __global__ void vlm_preprocess_bilinear_kernel(
             float p01 = get_pixel(x0, y1, c);
             float p11 = get_pixel(x1, y1, c);
 
-            // 双线性插值公式
             float val = (1 - u) * (1 - v) * p00 + u * (1 - v) * p10 +
                         (1 - u) * v * p01 + u * v * p11;
             
@@ -99,14 +94,13 @@ __global__ void vlm_preprocess_bilinear_kernel(
 extern "C" void launch_vlm_preprocess(
     const uint8_t* d_src, __half* d_dest_base, 
     int src_w, int src_h, int patch_size,
-    const std::vector<cv::Rect>& patches, // CPU 计算好的每个 patch 的位置
+    const std::vector<cv::Rect>& patches,
     cudaStream_t stream
 ) {
     dim3 block(16, 16);
     dim3 grid((patch_size + block.x - 1) / block.x, (patch_size + block.y - 1) / block.y);
 
     for (int i = 0; i < patches.size(); ++i) {
-        // 计算当前 patch 在大显存块中的起始地址
         __half* d_dest_patch = d_dest_base + (i * 3 * patch_size * patch_size);
         
         vlm_preprocess_bilinear_kernel<<<grid, block, 0, stream>>>(

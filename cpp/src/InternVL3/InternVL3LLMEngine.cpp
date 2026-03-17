@@ -477,36 +477,150 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
         std::cout << "If consider previous chats, the vocab size is " << cur_fake_id << std::endl;
     }
 
-    if (handle->prev_handles.size() > 0) {
+
+
+    if (handle->prev_handles.size() == 0) {
+        std::vector<int32_t> pre_prompt_tokens = tokenizer->Encode(pre_prompt);
+        for (auto tid : pre_prompt_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+
+        for (int i = 0; i < vis_features.image_patch_counts.size(); ++i) {
+            std::vector<int32_t> pre_img_tokens = tokenizer->Encode(images_prefix[i]);
+            for (auto tid : pre_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+
+            for (int j = 0; j < m_config.patch_token_size; ++j) input_ids.push_back(cur_fake_id + j);
+            cur_fake_id += m_config.patch_token_size;
+
+            std::vector<int32_t> post_img_tokens = tokenizer->Encode(images_postfix[i]);
+            for (auto tid : post_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+        }
+        
+        std::vector<int32_t> post_prompt_tokens = tokenizer->Encode(post_prompt);
+        for (auto tid : post_prompt_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+    } else {
+
+        size_t count = 0;
+        std::vector<int32_t> pre_prompt_tokens = tokenizer->Encode(pre_prompt);
+        count += pre_prompt_tokens.size();
+
+        for (int i = 0; i < vis_features.image_patch_counts.size(); ++i) {
+            std::vector<int32_t> pre_img_tokens = tokenizer->Encode(images_prefix[i]);
+            count += pre_prompt_tokens.size();
+
+            // for (int j = 0; j < m_config.patch_token_size; ++j) input_ids.push_back(cur_fake_id + j);
+            count += m_config.patch_token_size;
+
+            std::vector<int32_t> post_img_tokens = tokenizer->Encode(images_postfix[i]);
+            count += post_img_tokens.size();
+        }
+        
+        std::vector<int32_t> post_prompt_tokens = tokenizer->Encode(post_prompt);
+        count += post_prompt_tokens.size();
+
+        size_t max_input_len = 4036;
+        // size_t max_input_len = 1000;
+        std::cout << "max_input_len is hardcoded to " << max_input_len << std::endl;
+        std::cout << "current input_len is " << count << std::endl;
+ 
+        size_t history_count = 0;
         auto const& prev_handle = handle->prev_handles[handle->prev_handles.size() - 1];
-        for (auto const& tid : prev_handle->generate_result.input_tokens) {
-            input_ids.push_back(static_cast<int32_t>(tid));
+        
+        history_count += prev_handle->generate_result.input_tokens.size();
+        history_count += prev_handle->generate_result.outputs_tokens[0].size();
+
+        std::cout << "history input_len is " << history_count << std::endl;
+
+        if (count + history_count > max_input_len) {
+
+            std::cout << "[Dynamic Window] Enabled. Limit: " << max_input_len 
+                        << ", Current Prompt: " << count << std::endl;
+            std::vector<int32_t> system_prompt_token = tokenizer->Encode("<|im_start|>system\n" + gen_config.system_prompt + "<|im_end|>\n");
+
+            size_t cur_count = count + system_prompt_token.size();
+
+            std::vector<std::vector<int32_t>> latest_user_prompt_token;
+
+            size_t total_history_chats = handle->prev_handles.size();
+            size_t retained_chats = 0;
+
+            for (int i = handle->prev_handles.size() - 1; i >= 0; --i) {
+                auto const& cur_handle = handle->prev_handles[i];
+                std::string cur_req_prompt = "<|im_start|>user\n" + cur_handle->generate_result.user_prompt + "<|im_end|>\n";
+                cur_req_prompt += "<|im_start|>assistant\n" + cur_handle->generate_result.outputs_text[0] + "<|im_end|>\n";
+
+                std::vector<int32_t> cur_req_prompt_token = tokenizer->Encode(cur_req_prompt);
+                
+                if (cur_count + cur_req_prompt_token.size() > max_input_len) { 
+
+                    std::cout << "[Dynamic Window] Limit reached at chat index " << i 
+                      << ". Dropping oldest " << (i + 1) << " chats." << std::endl;
+
+                    break;
+                } else {
+                    latest_user_prompt_token.push_back(cur_req_prompt_token);
+                    cur_count += cur_req_prompt_token.size();
+                    retained_chats++;
+                }
+            }
+
+            std::cout << "[Dynamic Window] Summary: Total Chats: " << total_history_chats 
+              << ", Retained: " << retained_chats 
+              << ", Final History Input Tokens: " << cur_count << std::endl;
+
+            for (auto const& tid : system_prompt_token) {
+                input_ids.push_back(static_cast<int32_t>(tid));
+            }
+
+            for (int i = latest_user_prompt_token.size() - 1; i >= 0; --i) {
+                for (auto const& tid : latest_user_prompt_token[i]) {
+                    input_ids.push_back(static_cast<int32_t>(tid));
+                }
+            }
+
+            std::vector<int32_t> pre_prompt_tokens = tokenizer->Encode(pre_prompt);
+            for (auto tid : pre_prompt_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+
+            for (int i = 0; i < vis_features.image_patch_counts.size(); ++i) {
+                std::vector<int32_t> pre_img_tokens = tokenizer->Encode(images_prefix[i]);
+                for (auto tid : pre_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+
+                for (int j = 0; j < m_config.patch_token_size; ++j) input_ids.push_back(cur_fake_id + j);
+                cur_fake_id += m_config.patch_token_size;
+
+                std::vector<int32_t> post_img_tokens = tokenizer->Encode(images_postfix[i]);
+                for (auto tid : post_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+            }
+            
+            std::vector<int32_t> post_prompt_tokens = tokenizer->Encode(post_prompt);
+            for (auto tid : post_prompt_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+
+        } else {
+            for (auto const& tid : prev_handle->generate_result.input_tokens) {
+                input_ids.push_back(static_cast<int32_t>(tid));
+            }
+            for (auto const& tid: prev_handle->generate_result.outputs_tokens[0]) { // consider only beams 0 now
+                input_ids.push_back(static_cast<int32_t>(tid));
+            }
+            std::cout << input_ids.size() << " of history being inherited" << std::endl;
+
+            std::vector<int32_t> pre_prompt_tokens = tokenizer->Encode(pre_prompt);
+            for (auto tid : pre_prompt_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+
+            for (int i = 0; i < vis_features.image_patch_counts.size(); ++i) {
+                std::vector<int32_t> pre_img_tokens = tokenizer->Encode(images_prefix[i]);
+                for (auto tid : pre_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+
+                for (int j = 0; j < m_config.patch_token_size; ++j) input_ids.push_back(cur_fake_id + j);
+                cur_fake_id += m_config.patch_token_size;
+
+                std::vector<int32_t> post_img_tokens = tokenizer->Encode(images_postfix[i]);
+                for (auto tid : post_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+            }
+            
+            std::vector<int32_t> post_prompt_tokens = tokenizer->Encode(post_prompt);
+            for (auto tid : post_prompt_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+
         }
-        for (auto const& tid: prev_handle->generate_result.outputs_tokens[0]) { // consider only beams 0 now
-            input_ids.push_back(static_cast<int32_t>(tid));
-        }
-        std::cout << input_ids.size() << " of history being inherited" << std::endl;
     }
-
-    std::vector<int32_t> pre_prompt_tokens = tokenizer->Encode(pre_prompt);
-    for (auto tid : pre_prompt_tokens) input_ids.push_back(static_cast<int32_t>(tid));
-
-    for (int i = 0; i < vis_features.image_patch_counts.size(); ++i) {
-        std::vector<int32_t> pre_img_tokens = tokenizer->Encode(images_prefix[i]);
-        for (auto tid : pre_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
-
-        for (int j = 0; j < m_config.patch_token_size; ++j) input_ids.push_back(cur_fake_id + j);
-        cur_fake_id += m_config.patch_token_size;
-
-        std::vector<int32_t> post_img_tokens = tokenizer->Encode(images_postfix[i]);
-        for (auto tid : post_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
-    }
-    
-    std::vector<int32_t> post_prompt_tokens = tokenizer->Encode(post_prompt);
-    for (auto tid : post_prompt_tokens) input_ids.push_back(static_cast<int32_t>(tid));
-    
-    
-
 
     tle::Request request = create_request_from_dict(
         input_ids,

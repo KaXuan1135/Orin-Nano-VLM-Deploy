@@ -9,7 +9,7 @@
 
 int main(int argc, char** argv) {
 
-    std::string model_path =  "/home/pi/kx/pt2engine_vlm/models/InternVL3-1B_i8";
+    std::string model_path =  "/mnt/sdcard/models/InternVL3-1B_i8";
 
     trt_multimodal::ModelConfig m_config = trt_multimodal::ModelConfig();
     m_config.model_type = trt_multimodal::ModelType::Type::INTERNVL3;

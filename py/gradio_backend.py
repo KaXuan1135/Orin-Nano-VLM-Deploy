@@ -13,6 +13,9 @@ class InferenceManager:
         self.runner = self.engine.AsyncInternVL3Runner(config)
         self.previous_handles = {}
 
+    def reset_history(self):
+        self.previous_handles = {}
+
     def stream_infer(self, message, image_data, session_id):
         """
         image_data: Gradio 传来的通常是一个字典 {'image': ..., 'text': ...} 
@@ -29,6 +32,7 @@ class InferenceManager:
         gen_config.system_prompt = "你是由上海人工智能实验室联合商汤科技开发的书生多模态大模型, 英文名叫InternVL, 是一个有用无害的人工智能助手。"
         gen_config.streaming = True
         gen_config.profiling = True
+        gen_config.max_new_tokens = 1024
 
         if session_id not in self.previous_handles.keys():
             self.previous_handles[session_id] = []
@@ -66,4 +70,3 @@ class InferenceManager:
         for label, value in stats:
             print(f"{label:<15} : {value:>12}")
         print("="*30 + "\n")
-# 全局单例管理器
