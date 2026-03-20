@@ -33,11 +33,11 @@ void print_gen_summary(const trt_multimodal::GenerateResult& res) {
 
     std::cout << std::fixed << std::setprecision(2);
     std::cout << "  " << std::left << std::setw(28) << "Total Latency:" 
-              << GREEN << res.generation_latency_ms() << RESET << " ms\n";
+              << GREEN << res.generation_latency() << RESET << " s\n";
     
-    if (res.time_to_first_token_ms() > 0) {
+    if (res.time_to_first_token() > 0) {
         std::cout << "  " << std::left << std::setw(28) << "Time to First Token (TTFT):" 
-                  << GREEN << res.time_to_first_token_ms() << RESET << " ms\n";
+                  << GREEN << res.time_to_first_token() << RESET << " s\n";
     }
 
     std::cout << " -------------------------------------------" << "\n";
@@ -183,7 +183,7 @@ int main(int argc, char** argv) {
         }
         
         // 累加 TTFT
-        double ttft = res.time_to_first_token_ms();
+        double ttft = res.time_to_first_token();
         if (ttft > 0) {
             total_ttft_ms += ttft;
             valid_ttft_count++;

@@ -63,8 +63,8 @@ PYBIND11_MODULE(my_engine_binding, m) {
     py::class_<VisGenHandle, SharedVisGenHandle>(m, "VisGenHandle")
         .def_property_readonly("vis_finished", [](const VisGenHandle& h) { return h.vis_finished.load(); })
         .def_property_readonly("gen_finished", [](const VisGenHandle& h) { return h.gen_finished.load(); })
-        .def_property_readonly("generation_latency_ms", [](const VisGenHandle& h) { return h.generate_result.generation_latency_ms(); })
-        .def_property_readonly("time_to_first_token_ms", [](const VisGenHandle& h) { return h.generate_result.time_to_first_token_ms(); })
+        .def_property_readonly("generation_latency", [](const VisGenHandle& h) { return h.generate_result.generation_latency(); })
+        .def_property_readonly("time_to_first_token", [](const VisGenHandle& h) { return h.generate_result.time_to_first_token(); })
         .def_property_readonly("tokens_per_second", [](const VisGenHandle& h) { return h.generate_result.tokens_per_second(); })
         .def_property_readonly("output_tokens_len", [](const VisGenHandle& h) { return h.generate_result.outputs_tokens_len()[0]; }) // consider beams 0 only
         .def_property_readonly("input_tokens_len", [](const VisGenHandle& h) { return h.generate_result.input_tokens_len(); })

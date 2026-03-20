@@ -65,6 +65,7 @@ void InternVL3VisionEngine::extract_visual_features(
     VisualFeatures& vis_feats,
     const bool sync
 ) {
+    vis_feats.start_proc = std::chrono::high_resolution_clock::now();
     vis_engine->context->setInputShape(
         "input", 
         nvinfer1::Dims4{
@@ -174,6 +175,7 @@ void InternVL3VisionEngine::extract_visual_features(
     vis_feats.dtype = DataType::BF16;
 
     if (sync) cudaStreamSynchronize(m_stream);
+    vis_feats.end_proc = std::chrono::high_resolution_clock::now();
 }
 
 void InternVL3VisionEngine::enqueue_extract_visual_features(

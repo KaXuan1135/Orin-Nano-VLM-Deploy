@@ -118,8 +118,11 @@ struct VisualFeatures {
     DataType dtype = DataType::UNKNOWN;
 
     // Only Return if Generate Config :: profiling == true
-    double vision_latency_ms = -1;    // 视觉特征提取耗时
-
+    std::chrono::high_resolution_clock::time_point start_queue;
+    std::chrono::high_resolution_clock::time_point end_queue;
+    std::chrono::high_resolution_clock::time_point start_proc;
+    std::chrono::high_resolution_clock::time_point end_proc;
+    
     size_t total_patches() const {
         size_t total = 0;
         for (const int& count : image_patch_counts) total += count; 
@@ -201,20 +204,27 @@ struct GenerateResult {
     std::string error_msg;
 
     // Only Return if Generate Config :: profiling == true
+    std::chrono::high_resolution_clock::time_point start_queue;
+    std::chrono::high_resolution_clock::time_point end_queue;
     std::chrono::high_resolution_clock::time_point start_gen;
     std::chrono::high_resolution_clock::time_point end_gen;
     std::chrono::high_resolution_clock::time_point start_ttft;
     std::chrono::high_resolution_clock::time_point end_ttft;
     std::atomic<bool> first_token_captured{false};
 
-    double generation_latency_ms() const {
+    double queue_latency() const {
         if (!gen_config.profiling) return 0.0;
-        return std::chrono::duration<double, std::milli>(end_gen - start_gen).count();
+        return std::chrono::duration<double>(end_queue - start_queue).count();
     }
 
-    double time_to_first_token_ms() const {
+    double generation_latency() const {
         if (!gen_config.profiling) return 0.0;
-        return std::chrono::duration<double, std::milli>(end_ttft - start_ttft).count();
+        return std::chrono::duration<double>(end_gen - start_gen).count();
+    }
+
+    double time_to_first_token() const {
+        if (!gen_config.profiling) return 0.0;
+        return std::chrono::duration<double>(end_ttft - start_ttft).count();
     }
 
     std::vector<int32_t> total_tokens() const {
@@ -227,16 +237,16 @@ struct GenerateResult {
     
     // First Beams Inference Speed
     double tokens_per_second() const {
-        if (generation_latency_ms() <= 0) return 0.0;
-        return (outputs_tokens_len()[0] / generation_latency_ms()) * 1000.0;
+        if (generation_latency() <= 0) return 0.0;
+        return (outputs_tokens_len()[0] / generation_latency());
     }
 
     // Whole System Throughput
     double system_throughput() const {
-        double lat = generation_latency_ms();
+        double lat = generation_latency();
         if (lat <= 0) return 0.0;
         auto lens = outputs_tokens_len(); 
-        return (std::accumulate(lens.begin(), lens.end(), 0.0) / lat) * 1000.0;
+        return (std::accumulate(lens.begin(), lens.end(), 0.0) / lat);
     }
 
 };

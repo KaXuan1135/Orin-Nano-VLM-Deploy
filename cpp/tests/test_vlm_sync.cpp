@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
         }
         
         // 累加 TTFT
-        double ttft = res.time_to_first_token_ms();
+        double ttft = res.time_to_first_token();
         if (ttft > 0) {
             total_ttft_ms += ttft;
             valid_ttft_count++;
@@ -103,7 +103,7 @@ int main(int argc, char** argv) {
     std::cout << "Total Elapsed Time    : " << total_elapsed_ms << " ms" << std::endl;
     std::cout << "Overall Throughput    : " << overall_tokens_per_second << " tokens/s" << std::endl;
     std::cout << "Avg Output Tokens/Req : " << avg_output_tokens << " tokens" << std::endl;
-    std::cout << "Average TTFT          : " << avg_ttft << " ms" << std::endl;
+    std::cout << "Average TTFT          : " << avg_ttft << " s" << std::endl;
     std::cout << std::string(40, '=') << std::endl;
 
 

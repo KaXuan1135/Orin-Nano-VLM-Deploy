@@ -37,38 +37,4 @@ void InternVL3Runner::generate(
 
 }
 
-// void InternVL3Runner::generate(
-//     const std::vector<cv::Mat>& images, 
-//     const std::string& user_prompt,
-//     const GenerateConfig& gen_config,
-//     GenerateResult& gen_result
-// ) {
-//     VisualFeatures vis_feats = VisualFeatures();
-//     vis_engine->extract_visual_features(images, gen_config, vis_feats, true);
-    
-//     llm_engine->generate_from_features(
-//         vis_feats, 
-//         user_prompt, 
-//         gen_config,
-//         gen_result
-//     );
-// }
-
-// void InternVL3Runner::extract_visual_features(
-//     const std::vector<cv::Mat>& images,
-//     const GenerateConfig& gen_config,
-//     VisualFeatures& vis_feats
-// ) {
-//     vis_engine->extract_visual_features(images, gen_config, vis_feats, true);
-// }
-
-// void InternVL3Runner::generate_from_features(
-//     const VisualFeatures& vis_features,
-//     const std::string& user_prompt,
-//     const GenerateConfig& gen_config,
-//     GenerateResult& gen_result
-// ) {
-//     llm_engine->generate_from_features(vis_features, user_prompt, gen_config, gen_result);
-// }
-
 } // namespace trt_multimodal

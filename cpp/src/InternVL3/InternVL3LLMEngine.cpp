@@ -301,12 +301,6 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
     SharedVisGenHandle& handle
 ) {
 
-    if (handle->prev_handles.size() > 0) {
-        std::cout << "Has prev" << std::endl;
-    } else {
-        std::cout << "No prev" << std::endl;
-    }
-
     std::string pre_prompt;
     if (handle->prev_handles.size() > 0) {
         pre_prompt = "<|im_end|>\n<|im_start|>user\n";
@@ -334,7 +328,7 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
     //Constuct Input Ids, Replace Image Token with fake tokens
     std::vector<int32_t> input_ids;
     size_t cur_fake_id = tokenizer->GetVocabSize();
-    std::cout << "If consider only this chat, the vocab size is " << cur_fake_id << std::endl;
+    // std::cout << "If consider only this chat, the vocab size is " << cur_fake_id << std::endl;
 
     if (handle->prev_handles.size() > 0) {
         for (auto const& prev_handle : handle->prev_handles) {

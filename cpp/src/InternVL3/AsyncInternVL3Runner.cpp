@@ -1,3 +1,4 @@
+// #include "Utils/Monitor.hpp"
 #include "TrtMultimodalRunner/InternVL3/AsyncInternVL3Runner.hpp"
 
 namespace trt_multimodal {
@@ -63,7 +64,7 @@ SharedVisGenHandle AsyncInternVL3Runner::enqueue_extract_visual_features(
     {
         std::lock_guard<std::mutex> lock(m_vis_queue_mutex);
         m_queue_vis_tasks.push_back(handle);
-        std::cout << "[VIS Task] : Queue " << m_queue_vis_tasks.size() << std::endl;
+        handle->visual_features.start_queue = std::chrono::high_resolution_clock::now();
     }
     return handle;
 }
@@ -81,7 +82,6 @@ void AsyncInternVL3Runner::enqueue_generate_from_features(
     {
         std::lock_guard<std::mutex> lock(m_llm_queue_mutex);
         m_queue_llm_tasks.push_back(handle);
-        std::cout << "[LLM Task] : Queue " << m_queue_llm_tasks.size() << std::endl;
     }
     // return handle;
 }
@@ -100,13 +100,12 @@ void AsyncInternVL3Runner::worker_loop(
                 if ((m_inflight_vis_tasks.size() < max_inflight_vis) && handle) {
                     m_queue_vis_tasks.pop_front();
                     
+                    handle->visual_features.end_queue = std::chrono::high_resolution_clock::now();
                     m_inflight_vis_tasks[handle->vis_task_id] = handle;
                     m_sync_runner.vis_engine->enqueue_extract_visual_features(
                         handle->visual_features.images, 
                         handle->visual_features.gen_config, 
                         handle);
-
-                    std::cout << "[VIS Task] : Process " << m_inflight_vis_tasks.size() << " / " << max_inflight_vis << std::endl;
                 } else {
                     // std::cout << std::endl;
                 }
@@ -119,8 +118,8 @@ void AsyncInternVL3Runner::worker_loop(
                 if (handle->vis_finished.load()) {
                     if (handle->do_llm.load()) {
                         std::lock_guard<std::mutex> lock(m_llm_queue_mutex);
+                        handle->generate_result.start_queue = std::chrono::high_resolution_clock::now();
                         m_queue_llm_tasks.push_back(handle);
-                        std::cout << "[LLM Task] : Queue " << m_queue_llm_tasks.size() << std::endl;
                     }
                     it = m_inflight_vis_tasks.erase(it);
                     break;
@@ -137,14 +136,14 @@ void AsyncInternVL3Runner::worker_loop(
                 if ((m_inflight_llm_tasks.size() < max_inflight_llm) && handle) {
                     m_queue_llm_tasks.pop_front();
                     
+                    handle->generate_result.end_queue = std::chrono::high_resolution_clock::now();
                     m_inflight_llm_tasks[handle->llm_task_id] = handle;
                     m_sync_runner.llm_engine->enqueue_generate_from_features(
                         handle->visual_features, 
                         handle->generate_result.user_prompt, 
                         handle->generate_result.gen_config, 
                         handle);
-
-                    std::cout << "[LLM Task] : Process " << m_inflight_llm_tasks.size() << " / " << max_inflight_llm << std::endl;
+                    
                 } else {
                     // std::cout << std::endl;
                 }
@@ -174,7 +173,21 @@ void AsyncInternVL3Runner::worker_loop(
             }
         }
 
-        
+        {
+            std::lock_guard<std::mutex> lock_v(m_vis_queue_mutex);
+            std::lock_guard<std::mutex> lock_l(m_llm_queue_mutex);
+            std::lock_guard<std::mutex> lock_m(m_map_mutex);
+
+            monitor_update(
+                m_queue_vis_tasks.size(),
+                m_inflight_vis_tasks.size(),
+                m_queue_llm_tasks.size(),
+                m_inflight_llm_tasks.size(),
+                max_inflight_vis,
+                max_inflight_llm
+            );
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 }
 
