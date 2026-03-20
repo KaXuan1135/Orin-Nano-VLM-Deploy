@@ -133,42 +133,6 @@ struct VisualFeatures {
 
 struct GenerateResult {
 
-    GenerateResult() = default;
-
-    GenerateResult& operator=(GenerateResult&& other) noexcept {
-        if (this != &other) {
-            gen_config = std::move(other.gen_config);
-            request_id = other.request_id;
-            ttft_request_id = other.ttft_request_id;
-            system_prompt = std::move(other.system_prompt);
-            user_prompt = std::move(other.user_prompt);
-            input_tokens = std::move(other.input_tokens);
-            outputs_tokens = std::move(other.outputs_tokens);
-            outputs_text = std::move(other.outputs_text);
-            last_outputs_token = std::move(other.last_outputs_token);
-            last_outputs_text = std::move(other.last_outputs_text);
-            full_stops = std::move(other.full_stops);
-            error_msg = std::move(other.error_msg);
-            
-            done_output = other.done_output;
-            has_error = other.has_error;
-            first_token_captured.store(other.first_token_captured.load());
-
-            start_gen = other.start_gen;
-            end_gen = other.end_gen;
-            start_ttft = other.start_ttft;
-            end_ttft = other.end_ttft;
-        }
-        return *this;
-    }
-
-    GenerateResult(GenerateResult&& other) noexcept {
-        *this = std::move(other);
-    }
-
-    GenerateResult(const GenerateResult&) = delete;
-    GenerateResult& operator=(const GenerateResult&) = delete;
-
     GenerateConfig gen_config;
 
     std::uint64_t request_id;
@@ -181,7 +145,6 @@ struct GenerateResult {
     std::vector<std::vector<int32_t>> outputs_tokens; // beams of output tokens
     std::vector<std::string> outputs_text; // beams of output text
 
-    mutable std::mutex data_mutex;
     std::vector<std::vector<int32_t>> last_outputs_token; // last output tokens (the user should clean it after reading), for streaming purpose
     std::vector<std::string> last_outputs_text;
 
@@ -210,7 +173,7 @@ struct GenerateResult {
     std::chrono::high_resolution_clock::time_point end_gen;
     std::chrono::high_resolution_clock::time_point start_ttft;
     std::chrono::high_resolution_clock::time_point end_ttft;
-    std::atomic<bool> first_token_captured{false};
+    bool first_token_captured = false;
 
     double queue_latency() const {
         if (!gen_config.profiling) return 0.0;
@@ -268,8 +231,9 @@ struct VisGenHandle {
 
     std::vector<std::shared_ptr<VisGenHandle>> prev_handles; //temp solution
 
+    mutable std::mutex data_mutex;
     std::vector<std::string> pop_last_outputs_text() {
-        std::lock_guard<std::mutex> lock(generate_result.data_mutex);
+        std::lock_guard<std::mutex> lock(data_mutex);
         std::vector<std::string> result = generate_result.last_outputs_text; // 拷贝一份
 
         for (auto& beam : generate_result.last_outputs_token) {

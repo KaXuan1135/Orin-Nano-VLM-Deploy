@@ -71,7 +71,6 @@ SharedVisGenHandle AsyncInternVL3Runner::enqueue_extract_visual_features(
 
 void AsyncInternVL3Runner::enqueue_generate_from_features(
     SharedVisGenHandle& handle,
-    // const VisualFeatures& vis_features,
     const std::string& user_prompt,
     const GenerateConfig& gen_config
 ) {
@@ -83,13 +82,12 @@ void AsyncInternVL3Runner::enqueue_generate_from_features(
         std::lock_guard<std::mutex> lock(m_llm_queue_mutex);
         m_queue_llm_tasks.push_back(handle);
     }
-    // return handle;
 }
 
 void AsyncInternVL3Runner::worker_loop(
 ) {
     while (!m_stop) {
-        std::vector<GenerateResult*> gen_results;
+        std::vector<SharedVisGenHandle> to_update_handles;
         {   // Vision : Queue -> Process
             std::lock_guard<std::mutex> lock(m_vis_queue_mutex);
             if (!m_queue_vis_tasks.empty()) {
@@ -106,12 +104,10 @@ void AsyncInternVL3Runner::worker_loop(
                         handle->visual_features.images, 
                         handle->visual_features.gen_config, 
                         handle);
-                } else {
-                    // std::cout << std::endl;
                 }
             }
         }
-        {
+        {   // Vision : Done -> LLM : Queue
             std::lock_guard<std::mutex> lock(m_map_mutex);
             for (auto it = m_inflight_vis_tasks.begin(); it != m_inflight_vis_tasks.end(); ++it) {
                 auto& handle = it->second;
@@ -138,26 +134,17 @@ void AsyncInternVL3Runner::worker_loop(
                     
                     handle->generate_result.end_queue = std::chrono::high_resolution_clock::now();
                     m_inflight_llm_tasks[handle->llm_task_id] = handle;
-                    m_sync_runner.llm_engine->enqueue_generate_from_features(
-                        handle->visual_features, 
-                        handle->generate_result.user_prompt, 
-                        handle->generate_result.gen_config, 
-                        handle);
-                    
-                } else {
-                    // std::cout << std::endl;
+                    m_sync_runner.llm_engine->enqueue_generate_from_features(handle);
                 }
-
             }
         }
         {
             std::lock_guard<std::mutex> map_lock(m_map_mutex);
             for (auto& [rid, handle] : m_inflight_llm_tasks) {
-                gen_results.push_back(&(handle->generate_result));
+                to_update_handles.push_back(handle);
             }
         }
-        m_sync_runner.llm_engine->update_response(gen_results, 1000, false);
-
+        m_sync_runner.llm_engine->update_response(to_update_handles, 1000, false);
         {   // LLM : Done -> Removed
             std::lock_guard<std::mutex> lock(m_map_mutex);
             for (auto it = m_inflight_llm_tasks.begin(); it != m_inflight_llm_tasks.end(); ) {
@@ -172,8 +159,7 @@ void AsyncInternVL3Runner::worker_loop(
                 }
             }
         }
-
-        {
+        {   // Monitor
             std::lock_guard<std::mutex> lock_v(m_vis_queue_mutex);
             std::lock_guard<std::mutex> lock_l(m_llm_queue_mutex);
             std::lock_guard<std::mutex> lock_m(m_map_mutex);
@@ -190,5 +176,6 @@ void AsyncInternVL3Runner::worker_loop(
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 }
+
 
 } // namespace trt_multimodal

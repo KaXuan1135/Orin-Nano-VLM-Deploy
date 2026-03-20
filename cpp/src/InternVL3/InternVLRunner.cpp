@@ -23,17 +23,27 @@ void InternVL3Runner::generate(
     std::vector<GenerateResult>& gen_result
 ) {
 
-    std::vector<VisualFeatures> vis_feats(images.size());
-    for (int i = 0; i < images.size(); ++i) {
-        vis_engine->extract_visual_features(images[i], gen_config[i], vis_feats[i], true);
+    size_t batch_size = images.size();
+    std::vector<SharedVisGenHandle> handles(batch_size);
+    for (size_t b = 0; b < batch_size; ++b) {
+        handles[b] = std::make_shared<VisGenHandle>();
+        handles[b]->generate_result.user_prompt = user_prompt[b];
+        handles[b]->generate_result.gen_config = gen_config[b];
     }
 
-    llm_engine->generate_from_features(
-        vis_feats,
-        user_prompt,
-        gen_config,
-        gen_result
-    );
+    std::vector<VisualFeatures> vis_feats(images.size());
+    for (int i = 0; i < images.size(); ++i) {
+        vis_engine->extract_visual_features(images[i], gen_config[i], handles[i]->visual_features, true);
+    }
+
+    llm_engine->generate_from_features(handles);
+
+    gen_result.clear();
+    gen_result.reserve(handles.size());
+
+    for (const auto& handle : handles) {
+        gen_result.push_back(handle->generate_result);
+    }
 
 }
 

@@ -83,6 +83,8 @@ int main(int argc, char** argv) {
         aio_handles
     );
 
+    std::cout << aio_handles[0]->generate_result.outputs_text[0] << std::endl;
+
     return 0;
 
 }

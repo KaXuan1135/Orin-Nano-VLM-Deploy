@@ -16,21 +16,15 @@ public:
     );
 
     void generate_from_features(
-        const std::vector<VisualFeatures>& visual_features,
-        const std::vector<std::string>& user_prompt,
-        const std::vector<GenerateConfig>& generate_config,
-        std::vector<GenerateResult>& gen_result
+        std::vector<SharedVisGenHandle> handles
     );
 
     void enqueue_generate_from_features(
-        const VisualFeatures& visual_features,
-        const std::string& user_prompt,
-        const GenerateConfig& generate_config,
         SharedVisGenHandle& handle
     );
 
     void update_response(
-        std::vector<GenerateResult*>& request_results,
+        std::vector<SharedVisGenHandle>& handles,
         uint32_t timeout_ms,
         bool time_to_first_token_run
     );
@@ -39,9 +33,9 @@ private:
 
     ModelConfig m_config;
     cudaStream_t m_stream;
-    std::unique_ptr<tensorrt_llm::executor::Executor> llm_executor;
-    std::unique_ptr<tokenizers::Tokenizer> tokenizer;
     TokenizerMetadata metadata;
+    std::unique_ptr<tokenizers::Tokenizer> tokenizer;
+    std::unique_ptr<tensorrt_llm::executor::Executor> llm_executor;
 
     std::vector<std::string> decode_outputs(
         const std::vector<std::vector<int32_t>> beams_tokens,
