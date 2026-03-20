@@ -36,11 +36,11 @@ int main(int argc, char** argv) {
 
     std::vector<std::string> imagePaths = {
         "/home/pi/kx/sample_images/dog.jpg",
-        // "/home/pi/kx/sample_images/cat.jpg",
-        // "/home/pi/kx/sample_images/tiger.jpg",
-        // "/home/pi/kx/sample_images/wolf.jpg",
-        // "/home/pi/kx/sample_images/apple.jpg",
-        // "/home/pi/kx/sample_images/orange.jpg"
+        "/home/pi/kx/sample_images/cat.jpg",
+        "/home/pi/kx/sample_images/tiger.jpg",
+        "/home/pi/kx/sample_images/wolf.jpg",
+        "/home/pi/kx/sample_images/apple.jpg",
+        "/home/pi/kx/sample_images/orange.jpg"
     };
 
     std::unique_ptr<trt_multimodal::IMultimodalRunner> runner = trt_multimodal::IMultimodalRunner::create(m_config);
