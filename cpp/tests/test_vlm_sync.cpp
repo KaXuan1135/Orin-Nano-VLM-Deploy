@@ -9,26 +9,16 @@
 
 int main(int argc, char** argv) {
 
-    std::string model_path =  "/home/pi/kx/pt2engine_vlm/models/InternVL3-1B_i8";
-
-    trt_multimodal::ModelConfig m_config = trt_multimodal::ModelConfig();
-    m_config.model_type = trt_multimodal::ModelType::Type::INTERNVL3;
-
-    m_config.llm_engine_path = model_path + "/InternVL3-1B_llm_engine";
-    m_config.vis_engine_path = model_path + "/InternVL3-1B_vis_engine/model.engine";
-    m_config.tokenizer_path = model_path + "/tokenizers/tokenizer.json";
-
-    m_config.max_beam_width = 1;
-    m_config.max_llm_batch = 20;
-    m_config.max_vis_batch = 6;
-    m_config.patch_token_size = 256;
-    m_config.embedding_dim = 896;
+    trt_multimodal::ModelConfig m_config = trt_multimodal::ModelConfig(
+        trt_multimodal::ModelType::Type::INTERNVL3,
+        "/mnt/sdcard/models/InternVL3-1B_i8"
+    );
 
     trt_multimodal::GenerateConfig gen_config = trt_multimodal::GenerateConfig();
     gen_config.system_prompt = "你是由上海人工智能实验室联合商汤科技开发的书生多模态大模型, 英文名叫InternVL, 是一个有用无害的人工智能助手。";
     gen_config.image_prefix = "Image-$N$: ";
     gen_config.image_postfix = "\n";
-    gen_config.max_new_tokens = 350;
+    gen_config.max_new_tokens = 500;
     gen_config.top_k = 1;
     gen_config.top_p = 0.0f;
     gen_config.temperature = 0.2f;
@@ -40,7 +30,7 @@ int main(int argc, char** argv) {
     gen_config.streaming = false;
     gen_config.profiling = true;
 
-    int request_num = 20;
+    int request_num = 1;
 
     std::string inputText = "Can you describe the 6 images?";
 
@@ -70,7 +60,7 @@ int main(int argc, char** argv) {
 
     auto all_gen_start = std::chrono::high_resolution_clock::now();
 
-    runner->batch_generate(
+    runner->generate(
         batch_frames,
         batch_prompts,
         batch_configs,
@@ -137,27 +127,27 @@ int main(int argc, char** argv) {
 
     double batch_tps = (total_seconds > 0) ? (total_generated_tokens / total_seconds) : 0.0;
 
-    // std::cout << "\n--- Batch Generation Performance ---" << std::endl;
-    // std::cout << "Total Tokens Generated : " << total_generated_tokens << " tokens" << std::endl;
-    // std::cout << "Batch Wall-clock Time  : " << std::fixed << std::setprecision(4) << total_seconds << " s" << std::endl;
-    // std::cout << "Batch Throughput       : " << std::fixed << std::setprecision(2) << batch_tps << " tokens/sec" << std::endl;
-    // std::cout << "------------------------------------" << std::endl;
-    // std::cout << "\n" << "Model Generated Outputs (Batch 0)" << "\n";
-    // std::cout << " ===========================================" << "\n";
-    // if (gen_results[0].outputs_text.empty()) {
-    //     std::cout << "  " << "[No text generated]" << "\n";
-    // } else {
-    //     for (size_t i = 0; i < gen_results[0].outputs_text.size(); ++i) {
-    //         if (gen_results[0].outputs_text.size() > 1) {
-    //             std::cout << "  Beam " << i << ":" << "\n";
-    //         }
-    //         std::cout << "  \"" << gen_results[0].outputs_text[i] << "\"" << "\n";
-    //         if (i < gen_results[0].outputs_text.size() - 1) {
-    //             std::cout << "  -------------------------------------------" << "\n";
-    //         }
-    //     }
-    // }
-    // std::cout << " ===========================================\n" << std::endl;
+    std::cout << "\n--- Batch Generation Performance ---" << std::endl;
+    std::cout << "Total Tokens Generated : " << total_generated_tokens << " tokens" << std::endl;
+    std::cout << "Batch Wall-clock Time  : " << std::fixed << std::setprecision(4) << total_seconds << " s" << std::endl;
+    std::cout << "Batch Throughput       : " << std::fixed << std::setprecision(2) << batch_tps << " tokens/sec" << std::endl;
+    std::cout << "------------------------------------" << std::endl;
+    std::cout << "\n" << "Model Generated Outputs (Batch 0)" << "\n";
+    std::cout << " ===========================================" << "\n";
+    if (gen_results[0].outputs_text.empty()) {
+        std::cout << "  " << "[No text generated]" << "\n";
+    } else {
+        for (size_t i = 0; i < gen_results[0].outputs_text.size(); ++i) {
+            if (gen_results[0].outputs_text.size() > 1) {
+                std::cout << "  Beam " << i << ":" << "\n";
+            }
+            std::cout << "  \"" << gen_results[0].outputs_text[i] << "\"" << "\n";
+            if (i < gen_results[0].outputs_text.size() - 1) {
+                std::cout << "  -------------------------------------------" << "\n";
+            }
+        }
+    }
+    std::cout << " ===========================================\n" << std::endl;
 
     return 0;
 }

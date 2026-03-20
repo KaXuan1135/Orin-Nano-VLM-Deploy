@@ -47,7 +47,7 @@ assert (MOE_PLUGIN := 'disable') in ['auto', 'float16', 'float32', 'bfloat16' , 
 assert (PAGED_KV_CACHE := 'enable') in ['enable', 'disable']
 assert (MAMBA_CONV1D_PLUGIN := 'disable') in ['auto', 'float16', 'float32', 'bfloat16', 'int32', 'disable']
 assert (GPT_ATTENTION_PLUGIN := 'auto') in ['auto', 'float16', 'float32', 'bfloat16', 'int32', 'disable']
-assert (REMOVE_INPUT_PADDING := 'disable') in ['enable', 'disable'] # reduddant in batch size == 1 scenario
+assert (REMOVE_INPUT_PADDING := 'enable') in ['enable', 'disable'] # enable for cpp, disable for python
 
 def monitor_memory(proc, results):
     """Monitors the memory usage of a process and all its children."""
@@ -402,9 +402,9 @@ def main(args):
     MODEL_OUTPUT_PATH = f"/mnt/sdcard/models/{args.model_name}{precision_suffix}"
     os.makedirs(MODEL_OUTPUT_PATH, exist_ok=True)
     
-    ONNX_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/{args.model_name}_vis.onnx")
-    VIS_ENGINE_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/{args.model_name}_vis_engine")
-    LLM_ENGINE_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/{args.model_name}_llm_engine")
+    ONNX_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/vis.onnx")
+    VIS_ENGINE_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/vis_engine")
+    LLM_ENGINE_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/llm_engine")
     TKN_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/tokenizers")
 
     vis2onnx_build = {'skip': False, 'peak_rss_gb': 0, 'peak_vms_gb': 0, 'elapsed_time': 0}
