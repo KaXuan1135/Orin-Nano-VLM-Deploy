@@ -72,7 +72,7 @@ void AsyncInternVL3Runner::worker_loop(
                     m_inflight_vis_tasks[handle->vis_task_id] = handle;
                     m_sync_runner.vis_engine->enqueue_extract_visual_features(
                         handle->visual_features.images, 
-                        handle->visual_features.gen_config, 
+                        handle->gen_config, 
                         handle);
                 }
             }

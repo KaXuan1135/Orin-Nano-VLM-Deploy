@@ -110,7 +110,6 @@ struct GenerateConfig {
 
 struct VisualFeatures {
 
-    GenerateConfig gen_config;
     std::vector<cv::Mat> images;
 
     std::shared_ptr<void> embeddings_ptr;
@@ -132,8 +131,6 @@ struct VisualFeatures {
 };
 
 struct GenerateResult {
-
-    // GenerateConfig gen_config;
 
     std::uint64_t request_id;
     std::uint64_t ttft_request_id;
@@ -176,17 +173,14 @@ struct GenerateResult {
     bool first_token_captured = false;
 
     double queue_latency() const {
-        // if (!gen_config.profiling) return 0.0;
         return std::chrono::duration<double>(end_queue - start_queue).count();
     }
 
     double generation_latency() const {
-        // if (!gen_config.profiling) return 0.0;
         return std::chrono::duration<double>(end_gen - start_gen).count();
     }
 
     double time_to_first_token() const {
-        // if (!gen_config.profiling) return 0.0;
         return std::chrono::duration<double>(end_ttft - start_ttft).count();
     }
 

@@ -29,10 +29,6 @@ public:
         handle->generate_result.user_prompt = user_prompt;
         handle->visual_features.images = images;
 
-        //Redundant
-        handle->visual_features.gen_config = gen_config;
-        // handle->generate_result.gen_config = gen_config;
-
         return handle;
     }
 
