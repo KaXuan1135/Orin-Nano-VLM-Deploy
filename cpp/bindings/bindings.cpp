@@ -42,7 +42,6 @@ SharedVisGenHandle py_enqueue_generate(
 
     runner.enqueue_generate(handle);
     return handle;
-    // return runner.enqueue_generate(images[0], user_prompt[0], gen_config[0], prev_handles);
 }
 
 

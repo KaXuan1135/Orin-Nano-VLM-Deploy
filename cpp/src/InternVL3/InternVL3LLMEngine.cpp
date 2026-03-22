@@ -163,7 +163,6 @@ void InternVL3LLMEngine::generate_from_features(
     std::vector<tle::Request> requests;
     requests.reserve(batch_size);
 
-    // 1. Construct Inputs and Requests for the whole batch
     for (size_t b = 0; b < batch_size; ++b) {
         const auto& config = handles[b]->gen_config;
         
@@ -491,7 +490,6 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
     }
 
     std::uint64_t request_id = llm_executor->enqueueRequest(request);
-    // handle->generate_result.gen_config = gen_config;
     handle->generate_result.request_id = request_id;
     handle->generate_result.system_prompt = gen_config.system_prompt;
     handle->generate_result.user_prompt = user_prompt;
