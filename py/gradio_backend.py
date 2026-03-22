@@ -36,7 +36,7 @@ class InferenceManager:
         if session_id not in self.previous_handles.keys():
             self.previous_handles[session_id] = []
 
-        handle = self.runner.enqueue_chat([images], [message], [gen_config], self.previous_handles[session_id])
+        handle = self.runner.enqueue_generate([images], [message], [gen_config], self.previous_handles[session_id])
         if session_id in self.previous_handles.keys():
             self.previous_handles[session_id].append(handle)
         else:

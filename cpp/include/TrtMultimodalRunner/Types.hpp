@@ -133,7 +133,7 @@ struct VisualFeatures {
 
 struct GenerateResult {
 
-    GenerateConfig gen_config;
+    // GenerateConfig gen_config;
 
     std::uint64_t request_id;
     std::uint64_t ttft_request_id;
@@ -167,26 +167,26 @@ struct GenerateResult {
     std::string error_msg;
 
     // Only Return if Generate Config :: profiling == true
-    std::chrono::high_resolution_clock::time_point start_queue;
-    std::chrono::high_resolution_clock::time_point end_queue;
-    std::chrono::high_resolution_clock::time_point start_gen;
-    std::chrono::high_resolution_clock::time_point end_gen;
-    std::chrono::high_resolution_clock::time_point start_ttft;
-    std::chrono::high_resolution_clock::time_point end_ttft;
+    std::chrono::high_resolution_clock::time_point start_queue{};
+    std::chrono::high_resolution_clock::time_point end_queue{};
+    std::chrono::high_resolution_clock::time_point start_gen{};
+    std::chrono::high_resolution_clock::time_point end_gen{};
+    std::chrono::high_resolution_clock::time_point start_ttft{};
+    std::chrono::high_resolution_clock::time_point end_ttft{};
     bool first_token_captured = false;
 
     double queue_latency() const {
-        if (!gen_config.profiling) return 0.0;
+        // if (!gen_config.profiling) return 0.0;
         return std::chrono::duration<double>(end_queue - start_queue).count();
     }
 
     double generation_latency() const {
-        if (!gen_config.profiling) return 0.0;
+        // if (!gen_config.profiling) return 0.0;
         return std::chrono::duration<double>(end_gen - start_gen).count();
     }
 
     double time_to_first_token() const {
-        if (!gen_config.profiling) return 0.0;
+        // if (!gen_config.profiling) return 0.0;
         return std::chrono::duration<double>(end_ttft - start_ttft).count();
     }
 
@@ -226,10 +226,11 @@ struct VisGenHandle {
     std::atomic<bool> do_vis{false};
     std::atomic<bool> do_llm{false};
 
+    GenerateConfig gen_config;
     VisualFeatures visual_features;
     GenerateResult generate_result;
 
-    std::vector<std::shared_ptr<VisGenHandle>> prev_handles; //temp solution
+    std::vector<std::shared_ptr<VisGenHandle>> history_handles; //temp solution
 
     mutable std::mutex data_mutex;
     std::vector<std::string> pop_last_outputs_text() {

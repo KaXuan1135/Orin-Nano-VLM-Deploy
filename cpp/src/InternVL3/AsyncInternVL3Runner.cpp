@@ -23,42 +23,17 @@ AsyncInternVL3Runner::~AsyncInternVL3Runner()
     cudaDeviceSynchronize();
 }
 
-SharedVisGenHandle AsyncInternVL3Runner::enqueue_chat(
-    const std::vector<cv::Mat>& images, 
-    const std::string& user_prompt,
-    const GenerateConfig& gen_config,
-    const std::vector<SharedVisGenHandle>& prev_handles) 
-{
-    SharedVisGenHandle handle = enqueue_extract_visual_features(images, gen_config);
-    handle->llm_task_id = llm_rid++;
-    handle->do_llm.store(true);
-    handle->generate_result.gen_config = gen_config;
-    handle->generate_result.user_prompt = user_prompt;
-    return handle;
-}
-
-SharedVisGenHandle AsyncInternVL3Runner::enqueue_generate(
-    const std::vector<cv::Mat>& images, 
-    const std::string& user_prompt,
-    const GenerateConfig& gen_config,
-    const std::vector<SharedVisGenHandle>& prev_handles) // temp solution
-{
-    SharedVisGenHandle handle = enqueue_extract_visual_features(images, gen_config);
-    handle->llm_task_id = llm_rid++;
-    handle->do_llm.store(true);
-    handle->generate_result.gen_config = gen_config;
-    handle->generate_result.user_prompt = user_prompt;
-    handle->prev_handles = prev_handles;
-    return handle;
-}
-
-SharedVisGenHandle AsyncInternVL3Runner::enqueue_extract_visual_features(
-    const std::vector<cv::Mat>& images,
-    const GenerateConfig& gen_config
+void AsyncInternVL3Runner::enqueue_generate(
+    SharedVisGenHandle& handle
 ) {
-    SharedVisGenHandle handle = std::make_shared<VisGenHandle>();
-    handle->visual_features.images = images;
-    handle->visual_features.gen_config = gen_config;
+    enqueue_extract_visual_features(handle);
+    handle->llm_task_id = llm_rid++;
+    handle->do_llm.store(true);
+}
+
+void AsyncInternVL3Runner::enqueue_extract_visual_features(
+    SharedVisGenHandle& handle
+) {
     handle->vis_task_id = vis_rid++;
     handle->do_vis.store(true);
     {
@@ -66,18 +41,13 @@ SharedVisGenHandle AsyncInternVL3Runner::enqueue_extract_visual_features(
         m_queue_vis_tasks.push_back(handle);
         handle->visual_features.start_queue = std::chrono::high_resolution_clock::now();
     }
-    return handle;
 }
 
 void AsyncInternVL3Runner::enqueue_generate_from_features(
-    SharedVisGenHandle& handle,
-    const std::string& user_prompt,
-    const GenerateConfig& gen_config
+    SharedVisGenHandle& handle
 ) {
     handle->llm_task_id = llm_rid++;
     handle->do_llm.store(true);
-    handle->generate_result.gen_config = gen_config;
-    handle->generate_result.user_prompt = user_prompt;
     {
         std::lock_guard<std::mutex> lock(m_llm_queue_mutex);
         m_queue_llm_tasks.push_back(handle);

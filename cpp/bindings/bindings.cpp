@@ -17,7 +17,9 @@ cv::Mat numpy_to_mat(py::array_t<uint8_t> arr) {
     return mat.clone();
 }
 
-SharedVisGenHandle py_enqueue_chat(
+
+
+SharedVisGenHandle py_enqueue_generate(
     trt_multimodal::AsyncInternVL3Runner& runner,
     const std::vector<std::vector<py::array_t<uint8_t>>>& py_images,
     const std::vector<std::string>& user_prompt,
@@ -31,7 +33,16 @@ SharedVisGenHandle py_enqueue_chat(
         images.push_back(mat_row);
     }
 
-    return runner.enqueue_generate(images[0], user_prompt[0], gen_config[0], prev_handles);
+    SharedVisGenHandle handle = runner.create_handle(
+        gen_config[0],
+        user_prompt[0],
+        images[0],
+        prev_handles
+    );
+
+    runner.enqueue_generate(handle);
+    return handle;
+    // return runner.enqueue_generate(images[0], user_prompt[0], gen_config[0], prev_handles);
 }
 
 
@@ -58,7 +69,7 @@ PYBIND11_MODULE(my_engine_binding, m) {
 
     py::class_<AsyncInternVL3Runner>(m, "AsyncInternVL3Runner")
         .def(py::init<const ModelConfig&>())
-        .def("enqueue_chat", &py_enqueue_chat);
+        .def("enqueue_generate", &py_enqueue_generate);
 
     py::class_<VisGenHandle, SharedVisGenHandle>(m, "VisGenHandle")
         .def_property_readonly("vis_finished", [](const VisGenHandle& h) { return h.vis_finished.load(); })

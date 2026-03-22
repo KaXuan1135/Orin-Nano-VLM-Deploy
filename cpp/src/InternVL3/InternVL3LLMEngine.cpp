@@ -165,7 +165,7 @@ void InternVL3LLMEngine::generate_from_features(
 
     // 1. Construct Inputs and Requests for the whole batch
     for (size_t b = 0; b < batch_size; ++b) {
-        const auto& config = handles[b]->generate_result.gen_config;
+        const auto& config = handles[b]->gen_config;
         
         // Construct Textual Prompts
         std::string pre_prompt = "<|im_start|>system\n" + config.system_prompt + "<|im_end|>\n<|im_start|>user\n";
@@ -215,7 +215,6 @@ void InternVL3LLMEngine::generate_from_features(
             metadata
         ));
 
-        handles[b]->generate_result.gen_config = config;
         handles[b]->generate_result.input_tokens = input_ids;
         handles[b]->generate_result.outputs_tokens.resize(m_config.max_beam_width);
         handles[b]->generate_result.last_outputs_token.resize(m_config.max_beam_width);
@@ -259,9 +258,9 @@ void InternVL3LLMEngine::generate_from_features(
     // 4. Post-generation Profiling (TTFT estimation if needed)
     // Note: This logic repeats the inference for 1 token to measure TTFT overhead specifically.
     for (size_t b = 0; b < batch_size; ++b) {
-        const auto& config = handles[b]->generate_result.gen_config;
+        const auto& config = handles[b]->gen_config;
         if (config.profiling && !config.streaming) {
-            GenerateConfig ttft_config = handles[b]->generate_result.gen_config; // A new one
+            GenerateConfig ttft_config = handles[b]->gen_config; // A new one
             ttft_config.max_new_tokens = 1;
 
             tle::Request ttft_req = create_request_from_dict(
@@ -291,10 +290,10 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
 
     VisualFeatures& vis_features = handle->visual_features;
     std::string& user_prompt = handle->generate_result.user_prompt;
-    GenerateConfig& gen_config = handle->generate_result.gen_config;
+    GenerateConfig& gen_config = handle->gen_config;
 
     std::string pre_prompt;
-    if (handle->prev_handles.size() > 0) {
+    if (handle->history_handles.size() > 0) {
         pre_prompt = "<|im_end|>\n<|im_start|>user\n";
     } else {
         pre_prompt = "<|im_start|>system\n" + gen_config.system_prompt + "<|im_end|>\n<|im_start|>user\n";
@@ -322,8 +321,8 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
     size_t cur_fake_id = tokenizer->GetVocabSize();
     // std::cout << "If consider only this chat, the vocab size is " << cur_fake_id << std::endl;
 
-    if (handle->prev_handles.size() > 0) {
-        for (auto const& prev_handle : handle->prev_handles) {
+    if (handle->history_handles.size() > 0) {
+        for (auto const& prev_handle : handle->history_handles) {
             for (auto const& tid : prev_handle->generate_result.input_tokens) {
                 cur_fake_id = std::max(static_cast<long>(cur_fake_id), static_cast<long>(tid));
             }
@@ -333,7 +332,7 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
 
 
 
-    if (handle->prev_handles.size() == 0) {
+    if (handle->history_handles.size() == 0) {
         std::vector<int32_t> pre_prompt_tokens = tokenizer->Encode(pre_prompt);
         for (auto tid : pre_prompt_tokens) input_ids.push_back(static_cast<int32_t>(tid));
 
@@ -376,7 +375,7 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
         std::cout << "current input_len is " << count << std::endl;
  
         size_t history_count = 0;
-        auto const& prev_handle = handle->prev_handles[handle->prev_handles.size() - 1];
+        auto const& prev_handle = handle->history_handles[handle->history_handles.size() - 1];
         
         history_count += prev_handle->generate_result.input_tokens.size();
         history_count += prev_handle->generate_result.outputs_tokens[0].size();
@@ -393,11 +392,11 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
 
             std::vector<std::vector<int32_t>> latest_user_prompt_token;
 
-            size_t total_history_chats = handle->prev_handles.size();
+            size_t total_history_chats = handle->history_handles.size();
             size_t retained_chats = 0;
 
-            for (int i = handle->prev_handles.size() - 1; i >= 0; --i) {
-                auto const& cur_handle = handle->prev_handles[i];
+            for (int i = handle->history_handles.size() - 1; i >= 0; --i) {
+                auto const& cur_handle = handle->history_handles[i];
                 std::string cur_req_prompt = "<|im_start|>user\n" + cur_handle->generate_result.user_prompt + "<|im_end|>\n";
                 cur_req_prompt += "<|im_start|>assistant\n" + cur_handle->generate_result.outputs_text[0] + "<|im_end|>\n";
 
@@ -492,7 +491,7 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
     }
 
     std::uint64_t request_id = llm_executor->enqueueRequest(request);
-    handle->generate_result.gen_config = gen_config;
+    // handle->generate_result.gen_config = gen_config;
     handle->generate_result.request_id = request_id;
     handle->generate_result.system_prompt = gen_config.system_prompt;
     handle->generate_result.user_prompt = user_prompt;
@@ -526,20 +525,24 @@ void InternVL3LLMEngine::update_response(
             res->error_msg = resp.getErrorMsg();
             res->has_error = true;
         }
+
         if ((time_to_first_token_run) || 
-           (res->gen_config.profiling && 
-            res->gen_config.streaming && 
+           (handle->gen_config.profiling && 
+            handle->gen_config.streaming && 
+        //    (res->gen_config.profiling && 
+        //     res->gen_config.streaming && 
             !res->first_token_captured)
         ) {
             res->first_token_captured = true;
             res->end_ttft = std::chrono::high_resolution_clock::now();
             if (time_to_first_token_run) break;
         }
-        auto const& result = resp.getResult();
 
+        auto const& result = resp.getResult();
         {
             std::lock_guard<std::mutex> lock(handle->data_mutex);
-            if (res->gen_config.streaming) {
+            if (handle->gen_config.streaming) {
+            // if (res->gen_config.streaming) {
                 // Streaming, the llm_engine only return result of output tokens
                 for (size_t beam_idx = 0; beam_idx < result.outputTokenIds.size(); ++beam_idx) {
                     auto const& tokens = result.outputTokenIds[beam_idx];
@@ -564,7 +567,6 @@ void InternVL3LLMEngine::update_response(
             );
         }
 
-
         if (result.isFinal && !time_to_first_token_run) {
             res->done_output = true;
             res->outputs_text = decode_outputs(
@@ -576,7 +578,8 @@ void InternVL3LLMEngine::update_response(
                 res->full_stops.push_back(res->outputs_tokens[m].back() == metadata.eos_id);
             }
 
-            if (res->gen_config.profiling) {
+            // if (res->gen_config.profiling) {
+            if (handle->gen_config.streaming) {
                 res->end_gen = std::chrono::high_resolution_clock::now();
             }
         }

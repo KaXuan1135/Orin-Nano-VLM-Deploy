@@ -58,7 +58,13 @@ int main(int argc, char** argv) {
 
     std::vector<trt_multimodal::SharedVisGenHandle> aio_handles;
     for (int i = 0; i < request_num; ++i) {
-        aio_handles.push_back(runner->enqueue_generate(frames, inputText, gen_config));
+        trt_multimodal::SharedVisGenHandle handle = runner->create_handle(
+            gen_config,
+            inputText,
+            frames
+        );
+        runner->enqueue_generate(handle);
+        aio_handles.push_back(handle);
     }
 
     while (true) {
@@ -67,10 +73,6 @@ int main(int argc, char** argv) {
             if (!aio_handles[i]->gen_finished.load()){
                 all_gen_done = false;
             }
-            // auto& res = aio_handles[i]->generate_result;
-            // if (!res.done_output.load()) {
-            //     all_gen_done = false;
-            // }
         }
         if (all_gen_done) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(100));

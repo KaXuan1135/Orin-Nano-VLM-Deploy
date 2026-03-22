@@ -28,7 +28,7 @@ void InternVL3Runner::generate(
     for (size_t b = 0; b < batch_size; ++b) {
         handles[b] = std::make_shared<VisGenHandle>();
         handles[b]->generate_result.user_prompt = user_prompt[b];
-        handles[b]->generate_result.gen_config = gen_config[b];
+        handles[b]->gen_config = gen_config[b];
     }
 
     std::vector<VisualFeatures> vis_feats(images.size());

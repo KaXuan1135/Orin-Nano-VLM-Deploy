@@ -120,7 +120,13 @@ int main(int argc, char** argv) {
 
     std::vector<trt_multimodal::SharedVisGenHandle> vis_handles;
     for (int i = 0; i < request_num; ++i) {
-        vis_handles.push_back(runner->enqueue_extract_visual_features(frames, gen_config));
+        trt_multimodal::SharedVisGenHandle handle = runner->create_handle(
+            gen_config,
+            inputText,
+            frames
+        );
+        runner->enqueue_extract_visual_features(handle);
+        vis_handles.push_back(handle);
     }
 
     // --- 阶段 2: 统一等待视觉提取完成 ---
@@ -141,7 +147,7 @@ int main(int argc, char** argv) {
 
     std::vector<trt_multimodal::SharedVisGenHandle> gen_handles;
     for (int i = 0; i < request_num; ++i) {
-        runner->enqueue_generate_from_features(vis_handles[i], inputText, gen_config);
+        runner->enqueue_generate_from_features(vis_handles[i]);
         gen_handles.push_back(vis_handles[i]);
     }
 

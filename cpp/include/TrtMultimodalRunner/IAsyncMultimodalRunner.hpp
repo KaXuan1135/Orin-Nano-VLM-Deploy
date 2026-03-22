@@ -19,24 +19,43 @@ public:
         const ModelConfig& model_config
     );
 
-    static std::unique_ptr<IAsyncMultimodalRunner> initialize();
-
-    virtual SharedVisGenHandle enqueue_generate(
-        const std::vector<cv::Mat>& images, 
-        const std::string& user_prompt,
+    static SharedVisGenHandle create_handle(
         const GenerateConfig& gen_config,
-        const std::vector<SharedVisGenHandle>& prev_handles = {} // temp solution
+        const std::string& user_prompt,
+        const std::vector<cv::Mat>& images = {}, 
+        const std::vector<SharedVisGenHandle>& history_handles = {}
+    ) {
+        SharedVisGenHandle handle = std::make_shared<VisGenHandle>();
+        handle->gen_config = gen_config;
+        handle->history_handles = history_handles;
+        handle->generate_result.user_prompt = user_prompt;
+        handle->visual_features.images = images;
+
+        //Redundant
+        handle->visual_features.gen_config = gen_config;
+        // handle->gen_config = gen_config;
+
+        return handle;
+    }
+
+    virtual void enqueue_generate(
+        SharedVisGenHandle& handle
+        // const std::vector<cv::Mat>& images, 
+        // const std::string& user_prompt,
+        // const GenerateConfig& gen_config,
+        // const std::vector<SharedVisGenHandle>& prev_handles = {} // temp solution
     ) = 0; 
 
-    virtual SharedVisGenHandle enqueue_extract_visual_features(
-        const std::vector<cv::Mat>& images,
-        const GenerateConfig& gen_config
+    virtual void enqueue_extract_visual_features(
+        SharedVisGenHandle& handle
+        // const std::vector<cv::Mat>& images,
+        // const GenerateConfig& gen_config
     ) = 0;
 
     virtual void enqueue_generate_from_features(
-        SharedVisGenHandle& handle,
-        const std::string& user_prompt,
-        const GenerateConfig& gen_config
+        SharedVisGenHandle& handle
+        // const std::string& user_prompt,
+        // const GenerateConfig& gen_config
     ) = 0;
 
     static void print_benchmark(

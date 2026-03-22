@@ -32,7 +32,7 @@ int main(int argc, char** argv) {
 
     int request_num = 1;
 
-    std::string inputText = "Can you describe the 6 images?";
+    std::string inputText = "Can you describe the 7 images?";
 
     std::vector<std::string> imagePaths = {
         "/home/pi/kx/sample_images/dog.jpg",
@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
         "/home/pi/kx/sample_images/tiger.jpg",
         "/home/pi/kx/sample_images/wolf.jpg",
         "/home/pi/kx/sample_images/apple.jpg",
-        "/home/pi/kx/sample_images/orange.jpg"
+        "/home/pi/kx/sample_images/orange.jpg",
     };
 
     std::unique_ptr<trt_multimodal::IMultimodalRunner> runner = trt_multimodal::IMultimodalRunner::create(m_config);
