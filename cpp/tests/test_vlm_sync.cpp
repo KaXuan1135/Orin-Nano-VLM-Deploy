@@ -30,9 +30,9 @@ int main(int argc, char** argv) {
     gen_config.streaming = false;
     gen_config.profiling = true;
 
-    int request_num = 1;
+    int request_num = 20;
 
-    std::string inputText = "Can you describe the 7 images?";
+    std::string inputText = "Can you describe the 6 images?";
 
     std::vector<std::string> imagePaths = {
         "/home/pi/kx/sample_images/dog.jpg",

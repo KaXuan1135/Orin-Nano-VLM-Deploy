@@ -60,6 +60,7 @@ struct ModelConfig {
     int32_t max_beam_width = -1;
     int32_t max_llm_batch = -1;
     int32_t max_input_len = -1;
+    int32_t max_num_frames = -1;
     int32_t embedding_dim = -1;
 
     int32_t max_vis_batch = -1;
@@ -83,6 +84,7 @@ struct ModelConfig {
 
         std::ifstream f_vis((base / "vis_engine" / "config.json").string());
         config = nlohmann::json::parse(f_vis);
+        max_num_frames = config["builder_config"]["max_num_frames"];
         max_vis_batch = config["builder_config"]["vis_batch_size"];
         // TODO : where can i extract get patch token size?
     };
