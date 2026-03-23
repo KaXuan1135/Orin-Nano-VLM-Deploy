@@ -56,8 +56,8 @@ class InferenceManager:
             yield full_text + final_tokens[0]
 
         stats = [
-            ["Latency", f"{handle.generation_latency:.2f} ms"],
-            ["TTFT", f"{handle.time_to_first_token:.2f} ms"],
+            ["Latency", f"{handle.generation_latency:.2f} s"],
+            ["TTFT", f"{handle.time_to_first_token:.2f} s"],
             ["Throughput", f"{handle.tokens_per_second:.2f} tokens/s"],
             ["Input Tokens", f"{handle.input_tokens_len}"],
             ["Output Tokens", f"{handle.output_tokens_len}"]
