@@ -140,6 +140,8 @@ struct GenerateResult {
     std::string system_prompt;
     std::string user_prompt;
 
+    void* image_embeddings_gpu_ptr = nullptr;
+
     std::vector<int32_t> input_tokens;
     std::vector<std::vector<int32_t>> outputs_tokens; // beams of output tokens
     std::vector<std::string> outputs_text; // beams of output text

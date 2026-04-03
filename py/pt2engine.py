@@ -30,7 +30,7 @@ MODEL_CKPT_MAP = {
 
 assert (MODEL_NAME := 'InternVL3-1B') in list(MODEL_CKPT_MAP.keys())
 NUM_FRAMES = 6
-LLM_BATCH_SIZE = 20
+LLM_BATCH_SIZE = 10
 VIS_BATCH_SIZE = 6 # NUM_FRAMES # if small enough, can do i in one run, NUM_FRAMES * LLM_BATCH_SIZE
 MAX_MULTIMODAL_LEN = 256 * NUM_FRAMES * LLM_BATCH_SIZE # total image len (sum of whole batch)
 MAX_INPUT_LEN = 256 * NUM_FRAMES + 2500 # input text length (for each batch)

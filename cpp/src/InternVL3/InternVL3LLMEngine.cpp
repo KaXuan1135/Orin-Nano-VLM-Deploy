@@ -21,7 +21,8 @@ tle::Request create_request_from_dict(
     const std::vector<VisualFeatures>& vis_features,
     const ModelConfig& m_config,
     const GenerateConfig& gen_config,
-    const TokenizerMetadata& metadata
+    const TokenizerMetadata& metadata,
+    void* d_combined_ptr
 ) {
     
     tle::SamplingConfig sampling_config(m_config.max_beam_width);
@@ -41,7 +42,7 @@ tle::Request create_request_from_dict(
     size_t element_size = 2; // assume bf16 or fp16
     size_t total_bytes = total_tokens * embedding_dim * element_size;
     
-    void* d_combined_ptr = nullptr;
+    // void* d_combined_ptr = nullptr;
     cudaMalloc(&d_combined_ptr, total_bytes);
 
     size_t offset_bytes = 0;
@@ -82,6 +83,8 @@ tle::Request create_request_from_dict(
         false,                                 // 17. bool returnAllGeneratedTokens
         0.0f                                   // 18. PriorityType priority 
     );
+
+    // *out_d_ptr = d_combined_ptr;
 
     return request;
 }
@@ -224,7 +227,8 @@ void InternVL3LLMEngine::generate_from_features(
                 {handles[b]->visual_features},
                 m_config,
                 ttft_config,
-                metadata
+                metadata,
+                handles[b]->generate_result.image_embeddings_gpu_ptr
             );
 
             handles[b]->generate_result.start_ttft = std::chrono::high_resolution_clock::now();
@@ -380,6 +384,7 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
         }
 
         // Start Constructing Whole input
+        cur_fake_id = tokenizer->GetVocabSize();
         for (auto tid : sys_tokens) input_ids.push_back(static_cast<int32_t>(tid));
 
         int passed_in_images_count = 0;
@@ -408,9 +413,9 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
                 for (auto tid : pre_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
 
                 for (int k = 0; k < m_config.patch_token_size * cur_handle->visual_features.image_patch_counts[j]; ++k) {
-                    input_ids.push_back(cur_fake_id);
+                    input_ids.push_back(cur_fake_id + k);
                 }
-                // cur_fake_id += m_config.patch_token_size * cur_handle->visual_features.image_patch_counts[j];
+                cur_fake_id += m_config.patch_token_size * cur_handle->visual_features.image_patch_counts[j];
 
                 auto post_img_tokens = tokenizer->Encode(config.image_postfix);
                 for (auto tid : post_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
@@ -445,8 +450,9 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
             for (auto tid : pre_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
 
             for (int k = 0; k < m_config.patch_token_size * handle->visual_features.image_patch_counts[j]; ++k) {
-                input_ids.push_back(cur_fake_id);
+                input_ids.push_back(cur_fake_id + k);
             }
+            cur_fake_id += m_config.patch_token_size * handle->visual_features.image_patch_counts[j];
 
             auto post_img_tokens = tokenizer->Encode(config.image_postfix);
             for (auto tid : post_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
@@ -466,7 +472,8 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
         all_vis_feats,
         m_config,
         config,
-        metadata
+        metadata,
+        handle->generate_result.image_embeddings_gpu_ptr
     );
 
     std::uint64_t request_id = llm_executor->enqueueRequest(request);
@@ -476,7 +483,7 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
     handle->generate_result.outputs_tokens.resize(m_config.max_beam_width);
     handle->generate_result.last_outputs_token.resize(m_config.max_beam_width);
     handle->generate_result.start_gen = std::chrono::high_resolution_clock::now();
-    
+
     if (config.streaming) {
         handle->generate_result.start_ttft = handle->generate_result.start_gen;
     }
@@ -553,6 +560,12 @@ void InternVL3LLMEngine::update_response(
                 res->outputs_tokens,
                 0
             );
+
+            if (res->image_embeddings_gpu_ptr) {
+                cudaFree(res->image_embeddings_gpu_ptr);
+                res->image_embeddings_gpu_ptr = nullptr;
+                std::cout << "Release Free" << std::endl;
+            }       
 
             for (size_t m = 0; m < res->outputs_tokens.size(); ++m) {
                 res->full_stops.push_back(res->outputs_tokens[m].back() == metadata.eos_id);
