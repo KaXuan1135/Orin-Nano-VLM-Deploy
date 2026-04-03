@@ -5,15 +5,19 @@ namespace trt_multimodal {
 InternVL3Runner::InternVL3Runner(
     const ModelConfig& config
 ) : m_config(config){
-    cudaError_t status = cudaStreamCreateWithFlags(&m_stream, cudaStreamNonBlocking);
+    cudaError_t status = cudaStreamCreateWithFlags(&vis_stream, cudaStreamNonBlocking);
+    if (status != cudaSuccess) throw std::runtime_error("Failed to create CUDA stream");
+    status = cudaStreamCreateWithFlags(&llm_stream, cudaStreamNonBlocking);
     if (status != cudaSuccess) throw std::runtime_error("Failed to create CUDA stream");
 
-    vis_engine = std::make_unique<InternVL3VisionEngine>(m_config, m_stream);
-    llm_engine = std::make_unique<InternVL3LLMEngine>(m_config, m_stream);
+    vis_engine = std::make_unique<InternVL3VisionEngine>(m_config, vis_stream);
+    llm_engine = std::make_unique<InternVL3LLMEngine>(m_config, llm_stream);
 }
 
 InternVL3Runner::~InternVL3Runner() {
-    if (m_stream) cudaStreamDestroy(m_stream);
+    // if (m_stream) cudaStreamDestroy(m_stream);
+    if (vis_stream) cudaStreamDestroy(vis_stream);
+    if (llm_stream) cudaStreamDestroy(llm_stream);
 }
 
 void InternVL3Runner::generate(

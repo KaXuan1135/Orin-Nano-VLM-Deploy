@@ -168,9 +168,7 @@ void InternVL3VisionEngine::extract_visual_features(
     // without accessing a dangling 'this' pointer.
     cudaStream_t stream_for_deleter = m_stream;
     vis_feats.embeddings_ptr = std::shared_ptr<void>(d_all_outputs_bf16, [stream_for_deleter](void* ptr) {
-        if (ptr) {
-            cudaFreeAsync(ptr, stream_for_deleter);
-        }
+        if (ptr) cudaFreeAsync(ptr, stream_for_deleter);
     });
     vis_feats.dtype = DataType::BF16;
 

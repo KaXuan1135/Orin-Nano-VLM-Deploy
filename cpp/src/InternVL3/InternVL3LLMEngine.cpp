@@ -42,7 +42,6 @@ tle::Request create_request_from_dict(
     size_t element_size = 2; // assume bf16 or fp16
     size_t total_bytes = total_tokens * embedding_dim * element_size;
     
-    // void* d_combined_ptr = nullptr;
     cudaMalloc(&d_combined_ptr, total_bytes);
 
     size_t offset_bytes = 0;
@@ -84,7 +83,76 @@ tle::Request create_request_from_dict(
         0.0f                                   // 18. PriorityType priority 
     );
 
-    // *out_d_ptr = d_combined_ptr;
+    return request;
+}
+
+tle::Request create_request_from_dict_async(
+    const std::vector<int32_t> input_ids,
+    const std::vector<VisualFeatures>& vis_features,
+    const ModelConfig& m_config,
+    const GenerateConfig& gen_config,
+    const TokenizerMetadata& metadata,
+    const cudaStream_t& m_stream,
+    void* d_combined_ptr
+) {
+    
+    tle::SamplingConfig sampling_config(m_config.max_beam_width);
+    sampling_config.setTopK(gen_config.top_k);
+    sampling_config.setTopP(gen_config.top_p ? gen_config.top_p > 0.0f : 1.0f); 
+    sampling_config.setTemperature(gen_config.temperature);
+    sampling_config.setRepetitionPenalty(gen_config.repetition_penalty);
+
+    size_t total_all_patches = 0;
+    for (const auto& vf : vis_features) {
+        total_all_patches += vf.total_patches();
+    }
+    
+    size_t total_tokens = total_all_patches * m_config.patch_token_size;
+    size_t embedding_dim = m_config.embedding_dim;
+    
+    size_t element_size = 2; // assume bf16 or fp16
+    size_t total_bytes = total_tokens * embedding_dim * element_size;
+    
+    cudaMallocAsync(&d_combined_ptr, total_bytes, m_stream);
+    
+    size_t offset_bytes = 0;
+    for (const auto& vf : vis_features) {
+        size_t current_bytes = vf.total_patches() * m_config.patch_token_size * embedding_dim * element_size;
+        cudaMemcpyAsync((char*)d_combined_ptr + offset_bytes, vf.embeddings_ptr.get(), current_bytes, cudaMemcpyDeviceToDevice, m_stream);
+        offset_bytes += current_bytes;
+    }
+
+    tle::Tensor embedding = tle::Tensor::of(
+        tle::DataType::kBF16,
+        d_combined_ptr,
+        tle::Shape{
+            static_cast<long int>(total_tokens), 
+            static_cast<long int>(m_config.embedding_dim)
+        }
+    );
+
+    std::optional<tle::PromptTuningConfig> pTuningConfig = tle::PromptTuningConfig(embedding);
+
+    tle::Request request(
+        input_ids,                             // 1. VecTokens
+        gen_config.max_new_tokens,             // 2. SizeType32
+        gen_config.streaming,                  // 3. bool streaming
+        sampling_config,                       // 4. const SamplingConfig&
+        tle::OutputConfig(),                   // 5. const OutputConfig&
+        metadata.eos_id,                       // 6. std::optional<int> endId
+        metadata.pad_id,                       // 7. std::optional<int> padId
+        std::nullopt,                          // 8. badWords
+        std::nullopt,                          // 9. stopWords
+        std::nullopt,                          // 10. std::optional<Tensor> embeddingBias
+        std::nullopt,                          // 11. std::optional<ExternalDraftTokensConfig>
+        pTuningConfig,                         // 12. PromptTuningConfig (图像特征)
+        std::nullopt,                          // 13. std::optional<LoraConfig>
+        std::nullopt,                          // 14. std::optional<std::string> lookaheadConfig
+        std::nullopt,                          // 15. std::optional<std::vector<int>> taskVocabSize
+        std::nullopt,                          // 16. std::optional<uint64_t> schedulerPolicyData
+        false,                                 // 17. bool returnAllGeneratedTokens
+        0.0f                                   // 18. PriorityType priority 
+    );
 
     return request;
 }
@@ -467,12 +535,13 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
     }
 
     // Create the Request object
-    tle::Request request = create_request_from_dict(
+    tle::Request request = create_request_from_dict_async(
         input_ids,
         all_vis_feats,
         m_config,
         config,
         metadata,
+        m_stream,
         handle->generate_result.image_embeddings_gpu_ptr
     );
 
@@ -562,9 +631,8 @@ void InternVL3LLMEngine::update_response(
             );
 
             if (res->image_embeddings_gpu_ptr) {
-                cudaFree(res->image_embeddings_gpu_ptr);
+                cudaFreeAsync(res->image_embeddings_gpu_ptr, m_stream);
                 res->image_embeddings_gpu_ptr = nullptr;
-                std::cout << "Release Free" << std::endl;
             }       
 
             for (size_t m = 0; m < res->outputs_tokens.size(); ++m) {

@@ -28,7 +28,8 @@ public:
 private:
 
     ModelConfig m_config;
-    cudaStream_t m_stream;
+    cudaStream_t vis_stream;
+    cudaStream_t llm_stream;
 
 };
 
