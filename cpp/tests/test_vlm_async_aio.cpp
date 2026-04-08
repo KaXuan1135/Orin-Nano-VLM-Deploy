@@ -11,7 +11,7 @@
 
 int main(int argc, char** argv) {
 
-    int request_num = 5; // 100
+    int request_num = 50; // 100
 
     std::string inputText = "Can you describe the 6 images?";
 

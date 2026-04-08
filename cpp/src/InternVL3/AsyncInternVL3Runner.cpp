@@ -59,26 +59,41 @@ void AsyncInternVL3Runner::worker_loop(
 ) {
     while (!m_stop) {
         std::vector<SharedVisGenHandle> to_update_handles;
+        
+        // SharedVisGenHandle vis_task_to_launch = nullptr;
         {   // Vision : Queue -> Process
             std::lock_guard<std::mutex> lock(m_vis_queue_mutex);
             if (!m_queue_vis_tasks.empty()) {
                 SharedVisGenHandle handle = m_queue_vis_tasks.front();
 
                 std::lock_guard<std::mutex> map_lock(m_map_mutex);
-                // if ((m_inflight_vis_tasks.size() < max_inflight_vis) && handle && (m_inflight_llm_tasks.size() < max_inflight_llm)) {
-                if ((m_inflight_vis_tasks.size() < max_inflight_vis) && handle) {
+                if ((m_inflight_vis_tasks.size() < max_inflight_vis) && handle && (m_inflight_llm_tasks.size() < max_inflight_llm)) {
+                // if ((m_inflight_vis_tasks.size() < max_inflight_vis) && handle) {
                     m_queue_vis_tasks.pop_front();
-                    
+                    // vis_task_to_launch = handle;
+
                     handle->visual_features.end_queue = std::chrono::high_resolution_clock::now();
                     m_inflight_vis_tasks[handle->vis_task_id] = handle;
-                    m_sync_runner.vis_engine->enqueue_extract_visual_features(
-                        // handle->visual_features.images, 
-                        // handle->gen_config, 
-                        handle);
-                    std::cout << "finished? " << handle->vis_finished.load() << std::endl; // 这里立刻就是 finished 了？
+                    auto s = std::chrono::high_resolution_clock::now();
+                    m_sync_runner.vis_engine->enqueue_extract_visual_features(handle);
+                    auto e = std::chrono::high_resolution_clock::now();
+                    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(e - s).count();
+
+                    std::cout << "[DEBUG] Enqueue function call cost: " << duration << " ms" << std::endl;
+                    
                 }
             }
         }
+        // if (vis_task_to_launch) {
+        //     vis_task_to_launch->visual_features.end_queue = std::chrono::high_resolution_clock::now();
+        //     m_inflight_vis_tasks[vis_task_to_launch->vis_task_id] = vis_task_to_launch;
+        //     auto s = std::chrono::high_resolution_clock::now();
+        //     m_sync_runner.vis_engine->enqueue_extract_visual_features(vis_task_to_launch);
+        //     auto e = std::chrono::high_resolution_clock::now();
+        //     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(e - s).count();
+
+        //     std::cout << "[DEBUG] Enqueue function call cost: " << duration << " ms" << std::endl;
+        // }
         {   // Vision : Done -> LLM : Queue
             std::lock_guard<std::mutex> lock(m_map_mutex);
             for (auto it = m_inflight_vis_tasks.begin(); it != m_inflight_vis_tasks.end(); ++it) {
@@ -135,8 +150,6 @@ void AsyncInternVL3Runner::worker_loop(
             std::lock_guard<std::mutex> lock_v(m_vis_queue_mutex);
             std::lock_guard<std::mutex> lock_l(m_llm_queue_mutex);
             std::lock_guard<std::mutex> lock_m(m_map_mutex);
-
-            std::cout << m_inflight_vis_tasks.size() << std::endl;
 
             monitor_update(
                 m_queue_vis_tasks.size(),

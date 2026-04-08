@@ -43,12 +43,16 @@ InternVL3VisionEngine::InternVL3VisionEngine(
     tokens_per_patch = m_config.patch_token_size * m_config.embedding_dim; // [256, 896]
     max_out_elements = m_config.max_vis_batch * tokens_per_patch; // [max_vis_batch, 256, 896]
     pixels_per_patch = 3 * m_config.patch_size * m_config.patch_size; // [3, 448, 448]
+
+    max_img_size = 256;
 }
 
 void InternVL3VisionEngine::init_static_pool(size_t pool_size) {
+    if (d_images_pool) d_images_pool.reset();
     if (d_inputs_pool) d_inputs_pool.reset();
     if (d_outputs_pool) d_outputs_pool.reset();
 
+    d_images_pool = std::make_unique<VisionSlotPool>(pool_size, max_img_size * max_img_size * 3);
     d_inputs_pool = std::make_unique<VisionSlotPool>(pool_size, m_config.max_vis_batch * pixels_per_patch * sizeof(__half)); // if input is fp16, then __half
     d_outputs_pool = std::make_unique<VisionSlotPool>(pool_size, max_out_elements * sizeof(__half)); // if output is fp16, then __half
 }
@@ -78,8 +82,19 @@ AspectRatio InternVL3VisionEngine::find_closest_aspect_ratio(float aspect_ratio,
     return best_ratio;
 }
 
+struct VisCallbackCtx {
+    VisionSlotPool* image_pool;
+    VisionSlotPool* input_pool;
+    VisionSlotPool* output_pool;
+    int image_idx;
+    int input_idx;
+    int output_idx;
+    SharedVisGenHandle handle;
+};
+
 void InternVL3VisionEngine::extract_visual_features(
-    SharedVisGenHandle& handle
+    SharedVisGenHandle& handle,
+    bool is_sync
 ) {
 
     std::vector<cv::Mat>& images = handle->visual_features.images;
@@ -121,10 +136,12 @@ void InternVL3VisionEngine::extract_visual_features(
     cudaMallocAsync(&d_final_output, vis_feats.total_patches() * tokens_per_patch * sizeof(uint16_t), m_stream); //bf16
 
     size_t current_patch_global_idx = 0;
+    int image_slot_idx = d_images_pool->acquire_slot();
     int input_slot_idx = d_inputs_pool->acquire_slot();
     int output_slot_idx = d_outputs_pool->acquire_slot();
     assert(input_slot_idx != -1 && output_slot_idx != -1);
 
+    void* d_image = d_images_pool->get_address(image_slot_idx);
     void* d_input = d_inputs_pool->get_address(input_slot_idx);
     void* d_output = d_outputs_pool->get_address(output_slot_idx);
     vis_engine->context->setTensorAddress("input", d_input);
@@ -134,17 +151,18 @@ void InternVL3VisionEngine::extract_visual_features(
     size_t cur_patch_count = 0;
     size_t done_patch_count = 0;
     for (size_t img_idx = 0; img_idx < images.size(); ++img_idx) {
-        const cv::Mat& img = images[img_idx];
-        assert(img.isContinuous());
+        cv::Mat img = images[img_idx];
         
-        uint8_t* d_src_img = nullptr;
-        size_t img_bytes = img.total() * 3;
+        if (img.cols > max_img_size || img.rows > max_img_size) {
+            float scale = std::min((float)max_img_size / img.cols, (float)max_img_size / img.rows);
+            cv::resize(img, img, cv::Size(), scale, scale, cv::INTER_AREA);
+        }
 
-        cudaMallocAsync(&d_src_img, img_bytes, m_stream);
-        cudaMemcpyAsync(d_src_img, img.data, img_bytes, cudaMemcpyHostToDevice, m_stream);
+        assert(img.isContinuous());
+        cudaMemcpyAsync(d_image, img.data, img.total() * 3, cudaMemcpyHostToDevice, m_stream);
 
         // If use pinned memory, dont use cudafreeasync in the back, use unregister
-        // cudaHostRegister(img.data, img_bytes, cudaHostRegisterMapped);
+        // cudaHostRegister(img.data, img.total() * 3, cudaHostRegisterMapped);
         // cudaHostGetDevicePointer(&d_src_img, img.data, 0);
 
         assert(all_patch_rects_on_src[img_idx].size() <= m_config.max_vis_batch);
@@ -164,7 +182,7 @@ void InternVL3VisionEngine::extract_visual_features(
         __half *d_patch_start = (__half*)d_input + (cur_patch_count * pixels_per_patch);
 
         launch_vlm_preprocess(
-            d_src_img, 
+            (uint8_t*)d_image,
             d_patch_start, 
             img.cols, img.rows, 
             m_config.patch_size,
@@ -172,8 +190,7 @@ void InternVL3VisionEngine::extract_visual_features(
             m_stream
         );
 
-        cur_patch_count += all_patch_rects_on_src[img_idx].size();
-        cudaFreeAsync(d_src_img, m_stream);        
+        cur_patch_count += all_patch_rects_on_src[img_idx].size();      
     }
 
     if (cur_patch_count > 0) {
@@ -188,7 +205,7 @@ void InternVL3VisionEngine::extract_visual_features(
     }
 
     // [Asynchronous Memory Management]
-    // We capture a local copy of m_stream to avoid dependency on 'this' pointer.
+    // Capture a local copy of m_stream to avoid dependency on 'this' pointer.
     // This ensures that even if the VisionEngine is destroyed, the shared_ptr's 
     // custom deleter can safely release the GPU memory via cudaFreeAsync 
     // without accessing a dangling 'this' pointer.
@@ -198,19 +215,34 @@ void InternVL3VisionEngine::extract_visual_features(
     });
     vis_feats.dtype = DataType::BF16;
 
-    // if (sync) cudaStreamSynchronize(m_stream);
+    auto ctx = new VisCallbackCtx{
+        d_images_pool.get(),
+        d_inputs_pool.get(), 
+        d_outputs_pool.get(), 
+        image_slot_idx,
+        input_slot_idx,
+        output_slot_idx, 
+        handle
+    };
 
-    d_inputs_pool->release_slot(input_slot_idx);
-    d_outputs_pool->release_slot(output_slot_idx);
+    // CUDA Callback
+    cudaLaunchHostFunc(m_stream, [](void* userData) {
+        auto c = static_cast<VisCallbackCtx*>(userData);
+        c->image_pool->release_slot(c->image_idx);
+        c->input_pool->release_slot(c->input_idx);
+        c->output_pool->release_slot(c->output_idx);
+        c->handle->vis_finished.store(true);
+        c->handle->visual_features.end_proc = std::chrono::high_resolution_clock::now();
+        delete c;
+    }, ctx);
 
-    vis_feats.end_proc = std::chrono::high_resolution_clock::now();
+    if (is_sync) cudaStreamSynchronize(m_stream);
 }
 
 void InternVL3VisionEngine::enqueue_extract_visual_features(
     SharedVisGenHandle& handle
 ) {
-    extract_visual_features(handle);
-    handle->vis_finished.store(true);
+    extract_visual_features(handle, false);
 }
 
 } // namespace trt_multimodal

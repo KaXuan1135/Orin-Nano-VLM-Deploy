@@ -71,7 +71,8 @@ public:
     void init_static_pool(size_t pool_size);
 
     void extract_visual_features(
-        SharedVisGenHandle& handle
+        SharedVisGenHandle& handle,
+        bool is_sync = true
     );
 
     void enqueue_extract_visual_features(
@@ -95,12 +96,13 @@ private:
     std::unique_ptr<VisionSession> vis_engine;
     ModelConfig m_config;
     cudaStream_t m_stream;
-    cudaEvent_t event;
 
     size_t tokens_per_patch;
     size_t max_out_elements;
     size_t pixels_per_patch;
+    size_t max_img_size;
 
+    std::unique_ptr<VisionSlotPool> d_images_pool;
     std::unique_ptr<VisionSlotPool> d_inputs_pool;
     std::unique_ptr<VisionSlotPool> d_outputs_pool;
 
