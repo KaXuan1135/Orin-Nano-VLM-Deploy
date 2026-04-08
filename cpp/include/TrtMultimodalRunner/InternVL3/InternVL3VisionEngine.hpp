@@ -6,6 +6,59 @@
 
 namespace trt_multimodal {
 
+class VisionSlotPool {
+
+public:
+
+    VisionSlotPool() {}
+
+    ~VisionSlotPool() {
+        for (auto& slot : m_slots) {
+            if (slot.ptr) cudaFree(slot.ptr);
+        }
+    }
+
+    void init_slots(size_t num_slots, size_t slot_size) {
+        for (size_t i = 0; i < num_slots; ++i) {
+            void *ptr = nullptr;
+            cudaMalloc(&ptr, slot_size);
+            m_slots.push_back({ptr, false});
+            m_free_indices.push(i);
+        }
+    }
+
+    int acquire_slot() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_free_indices.size() < 1) return -1;
+
+        int idx = m_free_indices.front();
+        m_free_indices.pop();
+        m_slots[idx].occupied = true;
+
+        return idx;
+    }
+
+    void release_slot(const int& idx) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_free_indices.push(idx);
+        m_slots[idx].occupied = false;
+    }
+
+    void* get_address(int index) { return m_slots[index].ptr; }
+
+private:
+
+    struct Slot{
+        void* ptr;
+        bool occupied;
+    };
+
+    std::vector<Slot> m_slots;
+    std::queue<int> m_free_indices;
+    std::mutex m_mutex;
+
+};
+
 class InternVL3VisionEngine {
 public:
 
@@ -45,6 +98,24 @@ private:
     ModelConfig m_config;
     cudaStream_t m_stream;
     cudaEvent_t event;
+
+    size_t tokens_per_patch;
+    size_t max_out_elements;
+    size_t pixels_per_patch;
+
+    VisionSlotPool d_inputs_pool;
+    VisionSlotPool d_outputs_pool;
+
+    // size_t max_patch_allocated = 8;
+    // void *d_output_fp16 = nullptr;
+    // void *d_input_fp16 = nullptr;
+
+
+
+
+
+
+    void *d_all_outputs_bf16 = nullptr;
 
     class TRTLogger : public nvinfer1::ILogger {
         void log(Severity severity, const char* msg) noexcept override {

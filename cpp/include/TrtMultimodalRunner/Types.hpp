@@ -233,7 +233,7 @@ struct VisGenHandle {
     mutable std::mutex data_mutex;
     std::vector<std::string> pop_last_outputs_text() {
         std::lock_guard<std::mutex> lock(data_mutex);
-        std::vector<std::string> result = generate_result.last_outputs_text; // 拷贝一份
+        std::vector<std::string> result = generate_result.last_outputs_text;
 
         for (auto& beam : generate_result.last_outputs_token) {
             beam.clear();
