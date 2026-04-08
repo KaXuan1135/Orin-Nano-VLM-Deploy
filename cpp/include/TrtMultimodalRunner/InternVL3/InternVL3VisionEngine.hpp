@@ -10,20 +10,18 @@ class VisionSlotPool {
 
 public:
 
-    VisionSlotPool() {}
-
-    ~VisionSlotPool() {
-        for (auto& slot : m_slots) {
-            if (slot.ptr) cudaFree(slot.ptr);
-        }
-    }
-
-    void init_slots(size_t num_slots, size_t slot_size) {
+    VisionSlotPool(size_t num_slots, size_t slot_size) {
         for (size_t i = 0; i < num_slots; ++i) {
             void *ptr = nullptr;
             cudaMalloc(&ptr, slot_size);
             m_slots.push_back({ptr, false});
             m_free_indices.push(i);
+        }
+    }
+
+    ~VisionSlotPool() {
+        for (auto& slot : m_slots) {
+            if (slot.ptr) cudaFree(slot.ptr);
         }
     }
 
@@ -44,7 +42,10 @@ public:
         m_slots[idx].occupied = false;
     }
 
-    void* get_address(int index) { return m_slots[index].ptr; }
+    void* get_address(int index) { 
+        if (index == -1) return nullptr;
+        return m_slots[index].ptr; 
+    }
 
 private:
 
@@ -67,16 +68,13 @@ public:
         const cudaStream_t& stream
     );
 
+    void init_static_pool(size_t pool_size);
+
     void extract_visual_features(
-        const std::vector<cv::Mat>& images,
-        const GenerateConfig& gen_config,
-        VisualFeatures& vis_feats,
-        const bool sync = false
+        SharedVisGenHandle& handle
     );
 
     void enqueue_extract_visual_features(
-        const std::vector<cv::Mat>& images,
-        const GenerateConfig& gen_config,
         SharedVisGenHandle& handle
     );
 
@@ -103,19 +101,8 @@ private:
     size_t max_out_elements;
     size_t pixels_per_patch;
 
-    VisionSlotPool d_inputs_pool;
-    VisionSlotPool d_outputs_pool;
-
-    // size_t max_patch_allocated = 8;
-    // void *d_output_fp16 = nullptr;
-    // void *d_input_fp16 = nullptr;
-
-
-
-
-
-
-    void *d_all_outputs_bf16 = nullptr;
+    std::unique_ptr<VisionSlotPool> d_inputs_pool;
+    std::unique_ptr<VisionSlotPool> d_outputs_pool;
 
     class TRTLogger : public nvinfer1::ILogger {
         void log(Severity severity, const char* msg) noexcept override {

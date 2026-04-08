@@ -102,24 +102,30 @@ tle::Request create_request_from_dict_async(
     sampling_config.setTemperature(gen_config.temperature);
     sampling_config.setRepetitionPenalty(gen_config.repetition_penalty);
 
-    size_t total_all_patches = 0;
-    for (const auto& vf : vis_features) {
-        total_all_patches += vf.total_patches();
-    }
-    
-    size_t total_tokens = total_all_patches * m_config.patch_token_size;
-    size_t embedding_dim = m_config.embedding_dim;
-    
-    size_t element_size = 2; // assume bf16 or fp16
-    size_t total_bytes = total_tokens * embedding_dim * element_size;
-    
-    cudaMallocAsync(&d_combined_ptr, total_bytes, m_stream);
-    
-    size_t offset_bytes = 0;
-    for (const auto& vf : vis_features) {
-        size_t current_bytes = vf.total_patches() * m_config.patch_token_size * embedding_dim * element_size;
-        cudaMemcpyAsync((char*)d_combined_ptr + offset_bytes, vf.embeddings_ptr.get(), current_bytes, cudaMemcpyDeviceToDevice, m_stream);
-        offset_bytes += current_bytes;
+    size_t total_tokens;
+    if (vis_features.size() == 1) {
+        d_combined_ptr = vis_features[0].embeddings_ptr.get();
+        total_tokens = vis_features[0].total_patches() * m_config.patch_token_size;
+    } else {
+        size_t total_all_patches = 0;
+        for (const auto& vf : vis_features) {
+            total_all_patches += vf.total_patches();
+        }
+        
+        total_tokens = total_all_patches * m_config.patch_token_size;
+        size_t embedding_dim = m_config.embedding_dim;
+        
+        size_t element_size = 2; // assume bf16 or fp16
+        size_t total_bytes = total_tokens * embedding_dim * element_size;
+        
+        cudaMallocAsync(&d_combined_ptr, total_bytes, m_stream);
+        
+        size_t offset_bytes = 0;
+        for (const auto& vf : vis_features) {
+            size_t current_bytes = vf.total_patches() * m_config.patch_token_size * embedding_dim * element_size;
+            cudaMemcpyAsync((char*)d_combined_ptr + offset_bytes, vf.embeddings_ptr.get(), current_bytes, cudaMemcpyDeviceToDevice, m_stream);
+            offset_bytes += current_bytes;
+        }
     }
 
     tle::Tensor embedding = tle::Tensor::of(

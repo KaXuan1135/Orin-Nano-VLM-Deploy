@@ -12,10 +12,11 @@ InternVL3Runner::InternVL3Runner(
 
     vis_engine = std::make_unique<InternVL3VisionEngine>(m_config, vis_stream);
     llm_engine = std::make_unique<InternVL3LLMEngine>(m_config, llm_stream);
+
+    vis_engine->init_static_pool(1);
 }
 
 InternVL3Runner::~InternVL3Runner() {
-    // if (m_stream) cudaStreamDestroy(m_stream);
     if (vis_stream) cudaStreamDestroy(vis_stream);
     if (llm_stream) cudaStreamDestroy(llm_stream);
 }
@@ -30,14 +31,16 @@ void InternVL3Runner::generate(
     size_t batch_size = images.size();
     std::vector<SharedVisGenHandle> handles(batch_size);
     for (size_t b = 0; b < batch_size; ++b) {
-        handles[b] = std::make_shared<VisGenHandle>();
-        handles[b]->generate_result.user_prompt = user_prompt[b];
-        handles[b]->gen_config = gen_config[b];
+        handles[b] = create_handle(
+            gen_config[b],
+            user_prompt[b],
+            images[b]
+        );
     }
 
     std::vector<VisualFeatures> vis_feats(images.size());
     for (int i = 0; i < images.size(); ++i) {
-        vis_engine->extract_visual_features(images[i], gen_config[i], handles[i]->visual_features, true);
+        vis_engine->extract_visual_features(handles[i]);
     }
 
     llm_engine->generate_from_features(handles);

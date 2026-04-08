@@ -7,6 +7,7 @@ AsyncInternVL3Runner::AsyncInternVL3Runner(const ModelConfig& config)
     :m_sync_runner(config), m_stop(false)
 {
     m_worker = std::thread(&AsyncInternVL3Runner::worker_loop, this);
+    m_sync_runner.vis_engine->init_static_pool(max_inflight_vis);
 }
 
 AsyncInternVL3Runner::~AsyncInternVL3Runner() 
@@ -71,9 +72,10 @@ void AsyncInternVL3Runner::worker_loop(
                     handle->visual_features.end_queue = std::chrono::high_resolution_clock::now();
                     m_inflight_vis_tasks[handle->vis_task_id] = handle;
                     m_sync_runner.vis_engine->enqueue_extract_visual_features(
-                        handle->visual_features.images, 
-                        handle->gen_config, 
+                        // handle->visual_features.images, 
+                        // handle->gen_config, 
                         handle);
+                    std::cout << "finished? " << handle->vis_finished.load() << std::endl; // 这里立刻就是 finished 了？
                 }
             }
         }
@@ -133,6 +135,8 @@ void AsyncInternVL3Runner::worker_loop(
             std::lock_guard<std::mutex> lock_v(m_vis_queue_mutex);
             std::lock_guard<std::mutex> lock_l(m_llm_queue_mutex);
             std::lock_guard<std::mutex> lock_m(m_map_mutex);
+
+            std::cout << m_inflight_vis_tasks.size() << std::endl;
 
             monitor_update(
                 m_queue_vis_tasks.size(),

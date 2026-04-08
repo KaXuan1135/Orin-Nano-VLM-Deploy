@@ -30,25 +30,33 @@ InternVL3VisionEngine::InternVL3VisionEngine(
     vis_engine->runtime = nvinfer1::createInferRuntime(gLogger);
     vis_engine->engine = vis_engine->runtime->deserializeCudaEngine(buffer.data(), buffer.size());
     vis_engine->context = vis_engine->engine->createExecutionContext();
+    vis_engine->context->setInputShape(
+        "input", 
+        nvinfer1::Dims4{
+            m_config.max_vis_batch, 
+            3, 
+            m_config.patch_size, 
+            m_config.patch_size
+        }
+    );
 
-    size_t tokens_per_patch = m_config.patch_token_size * m_config.embedding_dim; // [256, 896]
-    size_t max_out_elements = m_config.max_vis_batch * tokens_per_patch; // [max_vis_batch, 256, 896]
-    size_t pixels_per_patch = 3 * 448 * 448; // [3, 448, 448], previously 448 patch size get from gen_config, but necessary? 
+    tokens_per_patch = m_config.patch_token_size * m_config.embedding_dim; // [256, 896]
+    max_out_elements = m_config.max_vis_batch * tokens_per_patch; // [max_vis_batch, 256, 896]
+    pixels_per_patch = 3 * m_config.patch_size * m_config.patch_size; // [3, 448, 448]
+}
 
-    int max_vis_inflight = 2;
-    int num_slots_for_input = 4;
+void InternVL3VisionEngine::init_static_pool(size_t pool_size) {
+    if (d_inputs_pool) d_inputs_pool.reset();
+    if (d_outputs_pool) d_outputs_pool.reset();
 
-    // output only need to follow max_vis_inflight, but for input there need to more for buffer (wait, i think no need?)
-    d_inputs_pool.init_slots(max_vis_inflight, m_config.max_vis_batch * pixels_per_patch * sizeof(__half)); // if input is fp16, then __half
-    d_outputs_pool.init_slots(max_vis_inflight, max_out_elements * sizeof(__half)); // if output is fp16, then __half
-
+    d_inputs_pool = std::make_unique<VisionSlotPool>(pool_size, m_config.max_vis_batch * pixels_per_patch * sizeof(__half)); // if input is fp16, then __half
+    d_outputs_pool = std::make_unique<VisionSlotPool>(pool_size, max_out_elements * sizeof(__half)); // if output is fp16, then __half
 }
 
 AspectRatio InternVL3VisionEngine::find_closest_aspect_ratio(float aspect_ratio, int min_num, int max_num, int image_size) {
     float best_ratio_diff = std::numeric_limits<float>::infinity();
     AspectRatio best_ratio = {1, 1};
 
-    // 预计算所有可能的 target_ratios (1*1, 1*2, 2*1 等)
     for (int n = min_num; n <= max_num; ++n) {
         for (int i = 1; i <= n; ++i) {
             for (int j = 1; j <= n; ++j) {
@@ -59,7 +67,6 @@ AspectRatio InternVL3VisionEngine::find_closest_aspect_ratio(float aspect_ratio,
                         best_ratio_diff = ratio_diff;
                         best_ratio = {i, j};
                     } else if (ratio_diff == best_ratio_diff) {
-                        // 如果比例相同，优先选择面积覆盖大的（对应 Python 代码逻辑）
                         if (i * j > best_ratio.width * best_ratio.height) {
                             best_ratio = {i, j};
                         }
@@ -72,21 +79,14 @@ AspectRatio InternVL3VisionEngine::find_closest_aspect_ratio(float aspect_ratio,
 }
 
 void InternVL3VisionEngine::extract_visual_features(
-    const std::vector<cv::Mat>& images,
-    const GenerateConfig& gen_config,
-    VisualFeatures& vis_feats,
-    const bool sync
+    SharedVisGenHandle& handle
 ) {
+
+    std::vector<cv::Mat>& images = handle->visual_features.images;
+    GenerateConfig& gen_config = handle->gen_config;
+    VisualFeatures& vis_feats = handle->visual_features;
+
     vis_feats.start_proc = std::chrono::high_resolution_clock::now();
-    vis_engine->context->setInputShape(
-        "input", 
-        nvinfer1::Dims4{
-            m_config.max_vis_batch, 
-            3, 
-            gen_config.patch_size, 
-            gen_config.patch_size
-        }
-    );
 
     std::vector<std::vector<cv::Rect>> all_patch_rects_on_src(images.size());
     for (size_t img_idx = 0; img_idx < images.size(); ++img_idx) {
@@ -94,7 +94,7 @@ void InternVL3VisionEngine::extract_visual_features(
         
         float aspect_ratio = (float)image.cols / image.rows;
         AspectRatio target_ratio = find_closest_aspect_ratio(
-            aspect_ratio, gen_config.min_patch, gen_config.max_patch, gen_config.patch_size);
+            aspect_ratio, gen_config.min_patch, gen_config.max_patch, m_config.patch_size);
 
         float sw = (float)image.cols / target_ratio.width;
         float sh = (float)image.rows / target_ratio.height;
@@ -121,80 +121,18 @@ void InternVL3VisionEngine::extract_visual_features(
     cudaMallocAsync(&d_final_output, vis_feats.total_patches() * tokens_per_patch * sizeof(uint16_t), m_stream); //bf16
 
     size_t current_patch_global_idx = 0;
-    // int input_slot_idx = d_inputs_pool.acquire_slot();
-    // int output_slot_idx = d_outputs_pool.acquire_slot();
+    int input_slot_idx = d_inputs_pool->acquire_slot();
+    int output_slot_idx = d_outputs_pool->acquire_slot();
+    assert(input_slot_idx != -1 && output_slot_idx != -1);
 
-    // void* d_input = d_inputs_pool.get_address(input_slot_idx);
-    // void* d_output = d_outputs_pool.get_address(output_slot_idx);
-    // assert(input_slot_idx != -1);
-    // assert(output_slot_idx != -1);
-    // vis_engine->context->setTensorAddress("input", d_input);
-    // vis_engine->context->setTensorAddress("output", d_output);
+    void* d_input = d_inputs_pool->get_address(input_slot_idx);
+    void* d_output = d_outputs_pool->get_address(output_slot_idx);
+    vis_engine->context->setTensorAddress("input", d_input);
+    vis_engine->context->setTensorAddress("output", d_output);
 
-    void *d_input = nullptr, *d_output = nullptr;
-    cudaMallocAsync(&d_input, vis_feats.total_patches() * pixels_per_patch * sizeof(__half), m_stream);
-    cudaMallocAsync(&d_output, max_out_elements * sizeof(uint16_t), m_stream);
-
-
-
-    // // Greedy Approach
-    // size_t cur_patch_count = 0;
-    // size_t done_patch_count = 0;
-    // for (size_t img_idx = 0; img_idx < images.size(); ++img_idx) {
-    //     const cv::Mat& img = images[img_idx];
-    //     assert(img.isContinuous());
-        
-    //     uint8_t* d_src_img = nullptr;
-    //     size_t img_bytes = img.total() * 3;
-
-    //     cudaMallocAsync(&d_src_img, img_bytes, m_stream);
-    //     cudaMemcpyAsync(d_src_img, img.data, img_bytes, cudaMemcpyHostToDevice, m_stream);
-
-    //     // If use pinned memory, dont use cudafreeasync in the back, use unregister
-    //     // cudaHostRegister(img.data, img_bytes, cudaHostRegisterMapped);
-    //     // cudaHostGetDevicePointer(&d_src_img, img.data, 0);
-
-    //     assert(all_patch_rects_on_src[img_idx].size() <= m_config.max_vis_batch);
-
-    //     if (cur_patch_count + all_patch_rects_on_src[img_idx].size() > m_config.max_vis_batch) {
-    //         assert(false);
-
-    //         size_t cur_out_elements = cur_patch_count * tokens_per_patch;
-    //         void* d_cur_output_offset = (uint16_t*)d_final_output + (done_patch_count * tokens_per_patch);
-            
-    //         vis_engine->context->enqueueV3(m_stream);
-    //         launch_fp16_to_bf16(d_output, d_cur_output_offset, cur_out_elements, m_stream);
-
-    //         done_patch_count += cur_patch_count;
-    //         cur_patch_count = 0;
-    //     }
-
-    //     __half *d_patch_start = (__half*)d_input + (cur_patch_count * pixels_per_patch);
-
-    //     launch_vlm_preprocess(
-    //         d_src_img, 
-    //         d_patch_start, 
-    //         img.cols, img.rows, 
-    //         gen_config.patch_size,
-    //         all_patch_rects_on_src[img_idx],
-    //         m_stream
-    //     );
-
-    //     cur_patch_count += all_patch_rects_on_src[img_idx].size();
-    //     cudaFreeAsync(d_src_img, m_stream);        
-    // }
-
-    // if (cur_patch_count > 0) {
-        
-    //     size_t cur_out_elements = cur_patch_count * tokens_per_patch;
-    //     void* d_cur_output_offset = (uint16_t*)d_final_output + (done_patch_count * tokens_per_patch);
-        
-    //     vis_engine->context->enqueueV3(m_stream);
-    //     launch_fp16_to_bf16(d_output, d_cur_output_offset, cur_out_elements, m_stream);
-    //     done_patch_count += cur_patch_count;
-    //     cur_patch_count = 0;
-    // }
-
+    // Greedy Approach
+    size_t cur_patch_count = 0;
+    size_t done_patch_count = 0;
     for (size_t img_idx = 0; img_idx < images.size(); ++img_idx) {
         const cv::Mat& img = images[img_idx];
         assert(img.isContinuous());
@@ -209,39 +147,45 @@ void InternVL3VisionEngine::extract_visual_features(
         // cudaHostRegister(img.data, img_bytes, cudaHostRegisterMapped);
         // cudaHostGetDevicePointer(&d_src_img, img.data, 0);
 
-        __half* d_patch_start = (__half*)d_input + (current_patch_global_idx * pixels_per_patch);
-        
+        assert(all_patch_rects_on_src[img_idx].size() <= m_config.max_vis_batch);
+
+        if (cur_patch_count + all_patch_rects_on_src[img_idx].size() > m_config.max_vis_batch) {
+            vis_engine->context->enqueueV3(m_stream);
+
+            size_t cur_out_elements = cur_patch_count * tokens_per_patch;
+            void* d_cur_output_offset = (uint16_t*)d_final_output + (done_patch_count * tokens_per_patch);
+            
+            launch_fp16_to_bf16(d_output, d_cur_output_offset, cur_out_elements, m_stream);
+
+            done_patch_count += cur_patch_count;
+            cur_patch_count = 0;
+        }
+
+        __half *d_patch_start = (__half*)d_input + (cur_patch_count * pixels_per_patch);
+
         launch_vlm_preprocess(
             d_src_img, 
             d_patch_start, 
             img.cols, img.rows, 
-            gen_config.patch_size,
+            m_config.patch_size,
             all_patch_rects_on_src[img_idx],
             m_stream
         );
 
-        current_patch_global_idx += all_patch_rects_on_src[img_idx].size();
-        cudaFreeAsync(d_src_img, m_stream);
+        cur_patch_count += all_patch_rects_on_src[img_idx].size();
+        cudaFreeAsync(d_src_img, m_stream);        
     }
 
-    for (size_t i = 0; i < vis_feats.total_patches(); i += m_config.max_vis_batch) {
-
-        size_t cur_batch_size = std::min(static_cast<size_t>(m_config.max_vis_batch), vis_feats.total_patches() - i);
-        size_t cur_out_elements = cur_batch_size * tokens_per_patch;
-
-        void* d_current_output_offset = (uint16_t*)d_final_output + (i * tokens_per_patch);
-
-        vis_engine->context->setTensorAddress("input", (uint16_t*)d_input + i * pixels_per_patch);
-        vis_engine->context->setTensorAddress("output", d_output);
+    if (cur_patch_count > 0) {
         vis_engine->context->enqueueV3(m_stream);
-        std::cout << "hi" << std::endl;
 
-        launch_fp16_to_bf16(d_output, d_current_output_offset, cur_out_elements, m_stream);
+        size_t cur_out_elements = cur_patch_count * tokens_per_patch;
+        void* d_cur_output_offset = (uint16_t*)d_final_output + (done_patch_count * tokens_per_patch);
+
+        launch_fp16_to_bf16(d_output, d_cur_output_offset, cur_out_elements, m_stream);
+        done_patch_count += cur_patch_count;
+        cur_patch_count = 0;
     }
-
-
-
-
 
     // [Asynchronous Memory Management]
     // We capture a local copy of m_stream to avoid dependency on 'this' pointer.
@@ -254,21 +198,18 @@ void InternVL3VisionEngine::extract_visual_features(
     });
     vis_feats.dtype = DataType::BF16;
 
-    if (sync) cudaStreamSynchronize(m_stream);
+    // if (sync) cudaStreamSynchronize(m_stream);
+
+    d_inputs_pool->release_slot(input_slot_idx);
+    d_outputs_pool->release_slot(output_slot_idx);
+
     vis_feats.end_proc = std::chrono::high_resolution_clock::now();
 }
 
 void InternVL3VisionEngine::enqueue_extract_visual_features(
-    const std::vector<cv::Mat>& images,
-    const GenerateConfig& gen_config,
     SharedVisGenHandle& handle
 ) {
-    extract_visual_features(
-        images,
-        gen_config,
-        handle->visual_features,
-        true
-    );
+    extract_visual_features(handle);
     handle->vis_finished.store(true);
 }
 
