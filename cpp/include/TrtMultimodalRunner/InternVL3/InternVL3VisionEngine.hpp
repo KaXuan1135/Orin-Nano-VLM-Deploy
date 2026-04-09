@@ -60,6 +60,80 @@ private:
 
 };
 
+class TRTLogger : public nvinfer1::ILogger {
+
+private:
+    void log(Severity severity, const char* msg) noexcept override {
+        if (severity <= Severity::kINFO) {
+            std::string label;
+            switch (severity) {
+                case Severity::kINTERNAL_ERROR: label = "[FATAL]";   break;
+                case Severity::kERROR:          label = "[ERROR]";   break;
+                case Severity::kWARNING:        label = "[WARNING]"; break;
+                case Severity::kINFO:           label = "[INFO]";    break;
+                case Severity::kVERBOSE:        label = "[VERBOSE]"; break;
+                default:                        label = "[UNKNOWN]"; break;
+            }
+            std::cout << "[TensorRT-VIS]" << label << " " << msg << std::endl;
+        }
+    }
+};
+
+class VisionSession {
+
+public:
+
+    VisionSession(
+        const std::vector<char>& buffer,
+        const size_t& num_ctx,
+        const std::string& input_name,
+        const nvinfer1::Dims4& input_dims
+    ) {
+        m_logger = TRTLogger();
+        m_runtime = nvinfer1::createInferRuntime(m_logger);
+        m_engine = m_runtime->deserializeCudaEngine(buffer.data(), buffer.size());;
+        for (size_t i = 0; i < num_ctx; ++i) {
+            m_contexts.push_back(m_engine->createExecutionContext());
+            m_contexts[i]->setInputShape(input_name.c_str(), input_dims);
+            m_free_context_indices.push(i);
+        }
+    }
+
+    ~VisionSession() {
+        for (auto* ctx : m_contexts) {
+            if (ctx) delete ctx; // TensorRT 10.x 之后可以直接 delete
+        }
+        if (m_engine) delete m_engine;
+        if (m_runtime) delete m_runtime;
+    }
+
+    int acquire_context() {
+        std::lock_guard<std::mutex> lock(m_ctx_mutex);
+        if (m_free_context_indices.empty()) return -1;
+        int idx = m_free_context_indices.front();
+        m_free_context_indices.pop();
+        return idx;
+    }
+
+    void release_context(int idx) {
+        std::lock_guard<std::mutex> lock(m_ctx_mutex);
+        m_free_context_indices.push(idx);
+    }
+
+    nvinfer1::IExecutionContext* get_context(int idx) {
+        return m_contexts[idx];
+    }
+
+private:
+    TRTLogger m_logger;
+    nvinfer1::IRuntime* m_runtime = nullptr;
+    nvinfer1::ICudaEngine* m_engine = nullptr;
+    
+    std::vector<nvinfer1::IExecutionContext*> m_contexts;
+    std::queue<int> m_free_context_indices;
+    std::mutex m_ctx_mutex;
+};
+
 class InternVL3VisionEngine {
 public:
 
@@ -68,7 +142,7 @@ public:
         const cudaStream_t& stream
     );
 
-    void init_static_pool(size_t pool_size);
+    void initialize(size_t pool_size);
 
     void extract_visual_features(
         SharedVisGenHandle& handle,
@@ -81,19 +155,8 @@ public:
 
 private:
 
-    struct VisionSession {
-        nvinfer1::IRuntime* runtime = nullptr;
-        nvinfer1::ICudaEngine* engine = nullptr;
-        nvinfer1::IExecutionContext* context = nullptr;
-
-        ~VisionSession() {
-            if (context) delete context;
-            if (engine)  delete engine;
-            if (runtime) delete runtime;
-        }
-    };
-
-    std::unique_ptr<VisionSession> vis_engine;
+    std::atomic<bool> is_initialized{false};
+    std::unique_ptr<VisionSession> m_vis_session;
     ModelConfig m_config;
     cudaStream_t m_stream;
 
@@ -106,23 +169,6 @@ private:
     std::unique_ptr<VisionSlotPool> d_inputs_pool;
     std::unique_ptr<VisionSlotPool> d_outputs_pool;
 
-    class TRTLogger : public nvinfer1::ILogger {
-        void log(Severity severity, const char* msg) noexcept override {
-            if (severity <= Severity::kINFO) {
-                std::string label;
-                switch (severity) {
-                    case Severity::kINTERNAL_ERROR: label = "[FATAL]";   break;
-                    case Severity::kERROR:          label = "[ERROR]";   break;
-                    case Severity::kWARNING:        label = "[WARNING]"; break;
-                    case Severity::kINFO:           label = "[INFO]";    break;
-                    case Severity::kVERBOSE:        label = "[VERBOSE]"; break;
-                    default:                        label = "[UNKNOWN]"; break;
-                }
-                std::cout << "[TensorRT-VIS]" << label << " " << msg << std::endl;
-            }
-        }
-    } gLogger;
-    
     AspectRatio find_closest_aspect_ratio(float aspect_ratio, int min_num, int max_num, int image_size);
 };
 

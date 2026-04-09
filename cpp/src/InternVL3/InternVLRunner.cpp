@@ -13,7 +13,7 @@ InternVL3Runner::InternVL3Runner(
     vis_engine = std::make_unique<InternVL3VisionEngine>(m_config, vis_stream);
     llm_engine = std::make_unique<InternVL3LLMEngine>(m_config, llm_stream);
 
-    vis_engine->init_static_pool(1);
+    vis_engine->initialize(1);
 }
 
 InternVL3Runner::~InternVL3Runner() {

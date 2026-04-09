@@ -16,6 +16,20 @@ InternVL3VisionEngine::InternVL3VisionEngine(
     const ModelConfig& config,
     const cudaStream_t& stream
 ): m_config(config), m_stream(stream) {
+    tokens_per_patch = m_config.patch_token_size * m_config.embedding_dim; // [256, 896]
+    max_out_elements = m_config.max_vis_batch * tokens_per_patch; // [max_vis_batch, 256, 896]
+    pixels_per_patch = 3 * m_config.patch_size * m_config.patch_size; // [3, 448, 448]
+
+    max_img_size = 512;
+}
+
+void InternVL3VisionEngine::initialize(size_t pool_size) {
+
+    is_initialized.store(true);
+    if (m_vis_session) m_vis_session.reset();
+    if (d_images_pool) d_images_pool.reset();
+    if (d_inputs_pool) d_inputs_pool.reset();
+    if (d_outputs_pool) d_outputs_pool.reset();
 
     std::ifstream file(m_config.vis_engine_path, std::ios::binary);
     if (!file) throw std::runtime_error("Engine file not found: " +  m_config.vis_engine_path);
@@ -26,32 +40,13 @@ InternVL3VisionEngine::InternVL3VisionEngine(
     std::vector<char> buffer(size);
     file.read(buffer.data(), size);
 
-    vis_engine = std::make_unique<VisionSession>();
-    vis_engine->runtime = nvinfer1::createInferRuntime(gLogger);
-    vis_engine->engine = vis_engine->runtime->deserializeCudaEngine(buffer.data(), buffer.size());
-    vis_engine->context = vis_engine->engine->createExecutionContext();
-    vis_engine->context->setInputShape(
-        "input", 
+    m_vis_session = std::make_unique<VisionSession>(
+        buffer, pool_size, "input",
         nvinfer1::Dims4{
-            m_config.max_vis_batch, 
-            3, 
-            m_config.patch_size, 
-            m_config.patch_size
+            m_config.max_vis_batch, 3, 
+            m_config.patch_size, m_config.patch_size
         }
     );
-
-    tokens_per_patch = m_config.patch_token_size * m_config.embedding_dim; // [256, 896]
-    max_out_elements = m_config.max_vis_batch * tokens_per_patch; // [max_vis_batch, 256, 896]
-    pixels_per_patch = 3 * m_config.patch_size * m_config.patch_size; // [3, 448, 448]
-
-    max_img_size = 256;
-}
-
-void InternVL3VisionEngine::init_static_pool(size_t pool_size) {
-    if (d_images_pool) d_images_pool.reset();
-    if (d_inputs_pool) d_inputs_pool.reset();
-    if (d_outputs_pool) d_outputs_pool.reset();
-
     d_images_pool = std::make_unique<VisionSlotPool>(pool_size, max_img_size * max_img_size * 3);
     d_inputs_pool = std::make_unique<VisionSlotPool>(pool_size, m_config.max_vis_batch * pixels_per_patch * sizeof(__half)); // if input is fp16, then __half
     d_outputs_pool = std::make_unique<VisionSlotPool>(pool_size, max_out_elements * sizeof(__half)); // if output is fp16, then __half
@@ -83,12 +78,10 @@ AspectRatio InternVL3VisionEngine::find_closest_aspect_ratio(float aspect_ratio,
 }
 
 struct VisCallbackCtx {
-    VisionSlotPool* image_pool;
-    VisionSlotPool* input_pool;
-    VisionSlotPool* output_pool;
-    int image_idx;
-    int input_idx;
-    int output_idx;
+    VisionSession* vis_session; int ctx_idx;
+    VisionSlotPool* image_pool; int image_idx;
+    VisionSlotPool* input_pool; int input_idx;
+    VisionSlotPool* output_pool; int output_idx;
     SharedVisGenHandle handle;
 };
 
@@ -97,6 +90,7 @@ void InternVL3VisionEngine::extract_visual_features(
     bool is_sync
 ) {
 
+    assert(is_initialized.load());
     std::vector<cv::Mat>& images = handle->visual_features.images;
     GenerateConfig& gen_config = handle->gen_config;
     VisualFeatures& vis_feats = handle->visual_features;
@@ -144,8 +138,13 @@ void InternVL3VisionEngine::extract_visual_features(
     void* d_image = d_images_pool->get_address(image_slot_idx);
     void* d_input = d_inputs_pool->get_address(input_slot_idx);
     void* d_output = d_outputs_pool->get_address(output_slot_idx);
-    vis_engine->context->setTensorAddress("input", d_input);
-    vis_engine->context->setTensorAddress("output", d_output);
+
+    int ctx_idx = m_vis_session->acquire_context();
+    assert(ctx_idx != -1);
+
+    nvinfer1::IExecutionContext* ctx = m_vis_session->get_context(ctx_idx);
+    ctx->setTensorAddress("input", d_input);
+    ctx->setTensorAddress("output", d_output);
 
     // Greedy Approach
     size_t cur_patch_count = 0;
@@ -168,7 +167,7 @@ void InternVL3VisionEngine::extract_visual_features(
         assert(all_patch_rects_on_src[img_idx].size() <= m_config.max_vis_batch);
 
         if (cur_patch_count + all_patch_rects_on_src[img_idx].size() > m_config.max_vis_batch) {
-            vis_engine->context->enqueueV3(m_stream);
+            ctx->enqueueV3(m_stream);
 
             size_t cur_out_elements = cur_patch_count * tokens_per_patch;
             void* d_cur_output_offset = (uint16_t*)d_final_output + (done_patch_count * tokens_per_patch);
@@ -194,7 +193,7 @@ void InternVL3VisionEngine::extract_visual_features(
     }
 
     if (cur_patch_count > 0) {
-        vis_engine->context->enqueueV3(m_stream);
+        ctx->enqueueV3(m_stream);
 
         size_t cur_out_elements = cur_patch_count * tokens_per_patch;
         void* d_cur_output_offset = (uint16_t*)d_final_output + (done_patch_count * tokens_per_patch);
@@ -215,26 +214,25 @@ void InternVL3VisionEngine::extract_visual_features(
     });
     vis_feats.dtype = DataType::BF16;
 
-    auto ctx = new VisCallbackCtx{
-        d_images_pool.get(),
-        d_inputs_pool.get(), 
-        d_outputs_pool.get(), 
-        image_slot_idx,
-        input_slot_idx,
-        output_slot_idx, 
+    auto cuda_callback_ctx = new VisCallbackCtx{
+        m_vis_session.get(), ctx_idx,
+        d_images_pool.get(), image_slot_idx,
+        d_inputs_pool.get(), input_slot_idx,
+        d_outputs_pool.get(), output_slot_idx,
         handle
     };
 
     // CUDA Callback
     cudaLaunchHostFunc(m_stream, [](void* userData) {
         auto c = static_cast<VisCallbackCtx*>(userData);
+        c->vis_session->release_context(c->ctx_idx);
         c->image_pool->release_slot(c->image_idx);
         c->input_pool->release_slot(c->input_idx);
         c->output_pool->release_slot(c->output_idx);
         c->handle->vis_finished.store(true);
         c->handle->visual_features.end_proc = std::chrono::high_resolution_clock::now();
         delete c;
-    }, ctx);
+    }, cuda_callback_ctx);
 
     if (is_sync) cudaStreamSynchronize(m_stream);
 }
