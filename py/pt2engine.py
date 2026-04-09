@@ -36,12 +36,14 @@ MAX_MULTIMODAL_LEN = 256 * NUM_FRAMES * LLM_BATCH_SIZE # total image len (sum of
 MAX_INPUT_LEN = 256 * NUM_FRAMES + 2500 # input text length (for each batch)
 MAX_SEQ_LEN = MAX_INPUT_LEN + 100 # output text length (for each batch)
 
+assert (VIS_DTYPE := 'float16') in ['float16', '']
+
 PP_SIZE = 1
 WORKERS = 1
 USE_WEIGHT_ONLY = True
 assert (WEIGHT_ONLY_PRECISION := 'int8') in ['int8', 'int4', 'int4_gptq']
 assert (GEMM_PLUGIN := 'auto') in ['auto', 'float16', 'float32', 'bfloat16', 'int32', 'fp8', 'disable']
-assert (DTYPE := 'bfloat16') in ['float32', 'bfloat16', 'float16']
+assert (LLM_DTYPE := 'bfloat16') in ['float32', 'bfloat16', 'float16']
 assert (CONTEXT_FMHA := 'enable') in ['enable', 'disable'] # optimized flash attention on orin nano
 assert (MOE_PLUGIN := 'disable') in ['auto', 'float16', 'float32', 'bfloat16' , 'int32' , 'disable']
 assert (PAGED_KV_CACHE := 'enable') in ['enable', 'disable']
@@ -174,6 +176,12 @@ def parse_arguments():
                         default=VIS_BATCH_SIZE,
                         help='Batch size for the vision engine')
 
+    # For Converting Vision Part of VLM to ENGINE
+    parser.add_argument('--vis_dtype',
+                        type=str,
+                        default=VIS_DTYPE,
+                        choices=['float16'])
+
     # For Converting Language Part of VLM to ENGINE
     parser.add_argument('--tp_size',
                         type=int,
@@ -185,9 +193,9 @@ def parse_arguments():
                         default=PP_SIZE,
                         help='N-way pipeline parallelism size')
 
-    parser.add_argument('--dtype',
+    parser.add_argument('--llm_dtype',
                         type=str,
-                        default=DTYPE,
+                        default=LLM_DTYPE,
                         choices=['float32', 'bfloat16', 'float16'])
 
     parser.add_argument('--use_weight_only',
@@ -399,7 +407,7 @@ def main(args):
     elif args.use_weight_only and "int8" in args.weight_only_precision:
         precision_suffix = "_i8"
 
-    MODEL_OUTPUT_PATH = f"/mnt/sdcard/models/{args.model_name}{precision_suffix}"
+    MODEL_OUTPUT_PATH = f"/mnt/sdcard/models/{args.model_name}{precision_suffix}_{args.vis_dtype}"
     os.makedirs(MODEL_OUTPUT_PATH, exist_ok=True)
     
     ONNX_PATH = os.path.join(os.getcwd(), f"{MODEL_OUTPUT_PATH}/vis.onnx")
@@ -418,7 +426,7 @@ def main(args):
     else:
         model = AutoModel.from_pretrained(
             MODEL_CKPT_PATH,
-            dtype=torch.float32,
+            dtype=torch.float16,
             low_cpu_mem_usage=True,
             trust_remote_code=True).eval()
         model.forward = model.extract_feature
@@ -595,7 +603,7 @@ def main(args):
             )
             QWenForCausalLM.quantize(args.model_dir,
                                     tmp_converted_dir,
-                                    dtype=args.dtype,
+                                    dtype=args.llm_dtype,
                                     mapping=mapping,
                                     quant_config=quant_config,
                                     calib_dataset=args.calib_dataset,
@@ -614,7 +622,7 @@ def main(args):
                                 moe_ep_size=args.moe_ep_size)
                 qwen = QWenForCausalLM.from_hugging_face(
                     model_dir if hf_model is None else hf_model,
-                    args.dtype,
+                    args.llm_dtype,
                     mapping=mapping,
                     quant_config=quant_config,
                     use_hf_gptq_checkpoint=use_hf_gptq_checkpoint,

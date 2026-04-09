@@ -16,6 +16,20 @@ InternVL3VisionEngine::InternVL3VisionEngine(
     const ModelConfig& config,
     const cudaStream_t& stream
 ): m_config(config), m_stream(stream) {
+    tokens_per_patch = m_config.patch_token_size * m_config.embedding_dim; // [256, 896]
+    max_out_elements = m_config.max_vis_batch * tokens_per_patch; // [max_vis_batch, 256, 896]
+    pixels_per_patch = 3 * m_config.patch_size * m_config.patch_size; // [3, 448, 448]
+
+    max_img_size = 512;
+}
+
+void InternVL3VisionEngine::initialize(size_t pool_size) {
+
+    is_initialized.store(true);
+    if (m_vis_session) m_vis_session.reset();
+    if (d_images_pool) d_images_pool.reset();
+    if (d_inputs_pool) d_inputs_pool.reset();
+    if (d_outputs_pool) d_outputs_pool.reset();
 
     std::ifstream file(m_config.vis_engine_path, std::ios::binary);
     if (!file) throw std::runtime_error("Engine file not found: " +  m_config.vis_engine_path);
@@ -26,17 +40,22 @@ InternVL3VisionEngine::InternVL3VisionEngine(
     std::vector<char> buffer(size);
     file.read(buffer.data(), size);
 
-    vis_engine = std::make_unique<VisionSession>();
-    vis_engine->runtime = nvinfer1::createInferRuntime(gLogger);
-    vis_engine->engine = vis_engine->runtime->deserializeCudaEngine(buffer.data(), buffer.size());
-    vis_engine->context = vis_engine->engine->createExecutionContext();
+    m_vis_session = std::make_unique<VisionSession>(
+        buffer, pool_size, "input",
+        nvinfer1::Dims4{
+            m_config.max_vis_batch, 3, 
+            m_config.patch_size, m_config.patch_size
+        }
+    );
+    d_images_pool = std::make_unique<VisionSlotPool>(pool_size, max_img_size * max_img_size * 3);
+    d_inputs_pool = std::make_unique<VisionSlotPool>(pool_size, m_config.max_vis_batch * pixels_per_patch * sizeof(__half)); // if input is fp16, then __half
+    d_outputs_pool = std::make_unique<VisionSlotPool>(pool_size, max_out_elements * sizeof(__half)); // if output is fp16, then __half
 }
 
 AspectRatio InternVL3VisionEngine::find_closest_aspect_ratio(float aspect_ratio, int min_num, int max_num, int image_size) {
     float best_ratio_diff = std::numeric_limits<float>::infinity();
     AspectRatio best_ratio = {1, 1};
 
-    // 预计算所有可能的 target_ratios (1*1, 1*2, 2*1 等)
     for (int n = min_num; n <= max_num; ++n) {
         for (int i = 1; i <= n; ++i) {
             for (int j = 1; j <= n; ++j) {
@@ -47,7 +66,6 @@ AspectRatio InternVL3VisionEngine::find_closest_aspect_ratio(float aspect_ratio,
                         best_ratio_diff = ratio_diff;
                         best_ratio = {i, j};
                     } else if (ratio_diff == best_ratio_diff) {
-                        // 如果比例相同，优先选择面积覆盖大的（对应 Python 代码逻辑）
                         if (i * j > best_ratio.width * best_ratio.height) {
                             best_ratio = {i, j};
                         }
@@ -59,26 +77,25 @@ AspectRatio InternVL3VisionEngine::find_closest_aspect_ratio(float aspect_ratio,
     return best_ratio;
 }
 
-void InternVL3VisionEngine::extract_visual_features(
-    const std::vector<cv::Mat>& images,
-    const GenerateConfig& gen_config,
-    VisualFeatures& vis_feats,
-    const bool sync
-) {
-    vis_feats.start_proc = std::chrono::high_resolution_clock::now();
-    vis_engine->context->setInputShape(
-        "input", 
-        nvinfer1::Dims4{
-            m_config.max_vis_batch, 
-            3, 
-            gen_config.patch_size, 
-            gen_config.patch_size
-        }
-    );
+struct VisCallbackCtx {
+    VisionSession* vis_session; int ctx_idx;
+    VisionSlotPool* image_pool; int image_idx;
+    VisionSlotPool* input_pool; int input_idx;
+    VisionSlotPool* output_pool; int output_idx;
+    SharedVisGenHandle handle;
+};
 
-    size_t tokens_per_patch = m_config.patch_token_size * m_config.embedding_dim; // [256, 896]
-    size_t max_out_elements = m_config.max_vis_batch * tokens_per_patch; // [max_vis_batch, 256, 896]
-    size_t pixels_per_patch = 3 * gen_config.patch_size * gen_config.patch_size; // [3, 448, 448]
+void InternVL3VisionEngine::extract_visual_features(
+    SharedVisGenHandle& handle,
+    bool is_sync
+) {
+
+    assert(is_initialized.load());
+    std::vector<cv::Mat>& images = handle->visual_features.images;
+    GenerateConfig& gen_config = handle->gen_config;
+    VisualFeatures& vis_feats = handle->visual_features;
+
+    vis_feats.start_proc = std::chrono::high_resolution_clock::now();
 
     std::vector<std::vector<cv::Rect>> all_patch_rects_on_src(images.size());
     for (size_t img_idx = 0; img_idx < images.size(); ++img_idx) {
@@ -86,7 +103,7 @@ void InternVL3VisionEngine::extract_visual_features(
         
         float aspect_ratio = (float)image.cols / image.rows;
         AspectRatio target_ratio = find_closest_aspect_ratio(
-            aspect_ratio, gen_config.min_patch, gen_config.max_patch, gen_config.patch_size);
+            aspect_ratio, gen_config.min_patch, gen_config.max_patch, m_config.patch_size);
 
         float sw = (float)image.cols / target_ratio.width;
         float sh = (float)image.rows / target_ratio.height;
@@ -106,88 +123,124 @@ void InternVL3VisionEngine::extract_visual_features(
     }
     
     /**
-    Before inferening in Vision Engine need to be in fp16
-    Output of Vision Engine is fp16, before inferencing in LLM Engine need to be in bf16
+    Input / Output of Vision Engine : fp16
+    Input of LLM Engine : bf16
     */
-    void *d_input_fp16 = nullptr, *d_output_fp16 = nullptr, *d_all_outputs_bf16 = nullptr;
-    cudaMallocAsync(&d_input_fp16, vis_feats.total_patches() * pixels_per_patch * sizeof(__half), m_stream);
-    cudaMallocAsync(&d_output_fp16, max_out_elements * sizeof(uint16_t), m_stream);
-    cudaMallocAsync(&d_all_outputs_bf16, vis_feats.total_patches() * tokens_per_patch * sizeof(uint16_t), m_stream);
+    void *d_final_output = nullptr;
+    cudaMallocAsync(&d_final_output, vis_feats.total_patches() * tokens_per_patch * sizeof(uint16_t), m_stream); //bf16
 
     size_t current_patch_global_idx = 0;
-    for (size_t img_idx = 0; img_idx < images.size(); ++img_idx) {
-        const cv::Mat& img = images[img_idx];
-        assert(img.isContinuous());
-        
-        uint8_t* d_src_img = nullptr;
-        size_t img_bytes = img.total() * 3;
+    int image_slot_idx = d_images_pool->acquire_slot();
+    int input_slot_idx = d_inputs_pool->acquire_slot();
+    int output_slot_idx = d_outputs_pool->acquire_slot();
+    assert(input_slot_idx != -1 && output_slot_idx != -1);
 
-        cudaMallocAsync(&d_src_img, img_bytes, m_stream);
-        cudaMemcpyAsync(d_src_img, img.data, img_bytes, cudaMemcpyHostToDevice, m_stream);
+    void* d_image = d_images_pool->get_address(image_slot_idx);
+    void* d_input = d_inputs_pool->get_address(input_slot_idx);
+    void* d_output = d_outputs_pool->get_address(output_slot_idx);
+
+    int ctx_idx = m_vis_session->acquire_context();
+    assert(ctx_idx != -1);
+
+    nvinfer1::IExecutionContext* ctx = m_vis_session->get_context(ctx_idx);
+    ctx->setTensorAddress("input", d_input);
+    ctx->setTensorAddress("output", d_output);
+
+    // Greedy Approach
+    size_t cur_patch_count = 0;
+    size_t done_patch_count = 0;
+    for (size_t img_idx = 0; img_idx < images.size(); ++img_idx) {
+        cv::Mat img = images[img_idx];
+        
+        if (img.cols > max_img_size || img.rows > max_img_size) {
+            float scale = std::min((float)max_img_size / img.cols, (float)max_img_size / img.rows);
+            cv::resize(img, img, cv::Size(), scale, scale, cv::INTER_AREA);
+        }
+
+        assert(img.isContinuous());
+        cudaMemcpyAsync(d_image, img.data, img.total() * 3, cudaMemcpyHostToDevice, m_stream);
 
         // If use pinned memory, dont use cudafreeasync in the back, use unregister
-        // cudaHostRegister(img.data, img_bytes, cudaHostRegisterMapped);
+        // cudaHostRegister(img.data, img.total() * 3, cudaHostRegisterMapped);
         // cudaHostGetDevicePointer(&d_src_img, img.data, 0);
 
-        __half* d_patch_start = (__half*)d_input_fp16 + (current_patch_global_idx * pixels_per_patch);
-        
+        assert(all_patch_rects_on_src[img_idx].size() <= m_config.max_vis_batch);
+
+        if (cur_patch_count + all_patch_rects_on_src[img_idx].size() > m_config.max_vis_batch) {
+            ctx->enqueueV3(m_stream);
+
+            size_t cur_out_elements = cur_patch_count * tokens_per_patch;
+            void* d_cur_output_offset = (uint16_t*)d_final_output + (done_patch_count * tokens_per_patch);
+            
+            launch_fp16_to_bf16(d_output, d_cur_output_offset, cur_out_elements, m_stream);
+
+            done_patch_count += cur_patch_count;
+            cur_patch_count = 0;
+        }
+
+        __half *d_patch_start = (__half*)d_input + (cur_patch_count * pixels_per_patch);
+
         launch_vlm_preprocess(
-            d_src_img, 
+            (uint8_t*)d_image,
             d_patch_start, 
             img.cols, img.rows, 
-            gen_config.patch_size,
+            m_config.patch_size,
             all_patch_rects_on_src[img_idx],
             m_stream
         );
 
-        current_patch_global_idx += all_patch_rects_on_src[img_idx].size();
-        cudaFreeAsync(d_src_img, m_stream);
+        cur_patch_count += all_patch_rects_on_src[img_idx].size();      
     }
 
-    for (size_t i = 0; i < vis_feats.total_patches(); i += m_config.max_vis_batch) {
+    if (cur_patch_count > 0) {
+        ctx->enqueueV3(m_stream);
 
-        size_t cur_batch_size = std::min(static_cast<size_t>(m_config.max_vis_batch), vis_feats.total_patches() - i);
-        size_t cur_out_elements = cur_batch_size * tokens_per_patch;
+        size_t cur_out_elements = cur_patch_count * tokens_per_patch;
+        void* d_cur_output_offset = (uint16_t*)d_final_output + (done_patch_count * tokens_per_patch);
 
-        void* d_current_output_offset = (uint16_t*)d_all_outputs_bf16 + (i * tokens_per_patch);
-
-        vis_engine->context->setTensorAddress("input", (uint16_t*)d_input_fp16 + i * pixels_per_patch);
-        vis_engine->context->setTensorAddress("output", d_output_fp16);
-        vis_engine->context->enqueueV3(m_stream);
-
-        launch_fp16_to_bf16(d_output_fp16, d_current_output_offset, cur_out_elements, m_stream);
+        launch_fp16_to_bf16(d_output, d_cur_output_offset, cur_out_elements, m_stream);
+        done_patch_count += cur_patch_count;
+        cur_patch_count = 0;
     }
 
-    cudaFreeAsync(d_input_fp16, m_stream);
-    cudaFreeAsync(d_output_fp16, m_stream);
-    
     // [Asynchronous Memory Management]
-    // We capture a local copy of m_stream to avoid dependency on 'this' pointer.
+    // Capture a local copy of m_stream to avoid dependency on 'this' pointer.
     // This ensures that even if the VisionEngine is destroyed, the shared_ptr's 
     // custom deleter can safely release the GPU memory via cudaFreeAsync 
     // without accessing a dangling 'this' pointer.
     cudaStream_t stream_for_deleter = m_stream;
-    vis_feats.embeddings_ptr = std::shared_ptr<void>(d_all_outputs_bf16, [stream_for_deleter](void* ptr) {
+    vis_feats.embeddings_ptr = std::shared_ptr<void>(d_final_output, [stream_for_deleter](void* ptr) {
         if (ptr) cudaFreeAsync(ptr, stream_for_deleter);
     });
     vis_feats.dtype = DataType::BF16;
 
-    if (sync) cudaStreamSynchronize(m_stream);
-    vis_feats.end_proc = std::chrono::high_resolution_clock::now();
+    auto cuda_callback_ctx = new VisCallbackCtx{
+        m_vis_session.get(), ctx_idx,
+        d_images_pool.get(), image_slot_idx,
+        d_inputs_pool.get(), input_slot_idx,
+        d_outputs_pool.get(), output_slot_idx,
+        handle
+    };
+
+    // CUDA Callback
+    cudaLaunchHostFunc(m_stream, [](void* userData) {
+        auto c = static_cast<VisCallbackCtx*>(userData);
+        c->vis_session->release_context(c->ctx_idx);
+        c->image_pool->release_slot(c->image_idx);
+        c->input_pool->release_slot(c->input_idx);
+        c->output_pool->release_slot(c->output_idx);
+        c->handle->vis_finished.store(true);
+        c->handle->visual_features.end_proc = std::chrono::high_resolution_clock::now();
+        delete c;
+    }, cuda_callback_ctx);
+
+    if (is_sync) cudaStreamSynchronize(m_stream);
 }
 
 void InternVL3VisionEngine::enqueue_extract_visual_features(
-    const std::vector<cv::Mat>& images,
-    const GenerateConfig& gen_config,
     SharedVisGenHandle& handle
 ) {
-    extract_visual_features(
-        images,
-        gen_config,
-        handle->visual_features,
-        true
-    );
-    handle->vis_finished.store(true);
+    extract_visual_features(handle, false);
 }
 
 } // namespace trt_multimodal

@@ -11,7 +11,7 @@ int main(int argc, char** argv) {
 
     trt_multimodal::ModelConfig m_config = trt_multimodal::ModelConfig(
         trt_multimodal::ModelType::Type::INTERNVL3,
-        "/mnt/sdcard/models/InternVL3-1B_i8"
+        "/mnt/sdcard/models/InternVL3-1B_i8_float16"
     );
 
     trt_multimodal::GenerateConfig gen_config = trt_multimodal::GenerateConfig();
@@ -25,7 +25,6 @@ int main(int argc, char** argv) {
     gen_config.repetition_penalty = 1.0f;
     gen_config.min_patch = 1;
     gen_config.max_patch = 1;
-    gen_config.patch_size = 448;
     gen_config.use_thumbnail = false;
     gen_config.streaming = false;
     gen_config.profiling = true;

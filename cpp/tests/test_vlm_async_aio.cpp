@@ -11,7 +11,7 @@
 
 int main(int argc, char** argv) {
 
-    int request_num = 100;
+    int request_num = 50; // 100
 
     std::string inputText = "Can you describe the 6 images?";
 
@@ -26,7 +26,7 @@ int main(int argc, char** argv) {
 
     trt_multimodal::ModelConfig m_config = trt_multimodal::ModelConfig(
         trt_multimodal::ModelType::Type::INTERNVL3,
-        "/mnt/sdcard/models/InternVL3-1B_i8"
+        "/mnt/sdcard/models/InternVL3-1B_i8_float16"
     );
 
     trt_multimodal::GenerateConfig gen_config = trt_multimodal::GenerateConfig();
@@ -40,7 +40,6 @@ int main(int argc, char** argv) {
     gen_config.repetition_penalty = 1.0f;
     gen_config.min_patch = 1;
     gen_config.max_patch = 1;
-    gen_config.patch_size = 448;
     gen_config.use_thumbnail = false;
     gen_config.streaming = true;
     gen_config.profiling = true;
@@ -85,7 +84,7 @@ int main(int argc, char** argv) {
         aio_handles
     );
 
-    std::cout << aio_handles[0]->generate_result.outputs_text[0] << std::endl;
+    std::cout << aio_handles[4]->generate_result.outputs_text[0] << std::endl;
 
     return 0;
 

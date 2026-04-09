@@ -100,7 +100,7 @@ int main(int argc, char** argv) {
     gen_config.repetition_penalty = 1.0f;
     gen_config.min_patch = 1;
     gen_config.max_patch = 1;
-    gen_config.patch_size = 448;
+    // gen_config.patch_size = 448;
     gen_config.use_thumbnail = false;
     gen_config.streaming = true;
     gen_config.profiling = true;
