@@ -116,22 +116,21 @@ public:
         std::cout << std::string(60, '=') << std::endl << std::endl;
     }
 
+private:
+    inline static std::ofstream monitor_file;
+
 protected:
 
     static void monitor_update(size_t vis_q, size_t vis_p, size_t llm_q, size_t llm_p, int max_vis, int max_llm) {
-        std::cerr << "\033[s"; 
+        if (!monitor_file.is_open()) {
+            monitor_file.open("/tmp/vlm_stats.txt", std::ios::out | std::ios::trunc);
+        }
 
-        std::cerr << "\033[2;1H";
-
-        std::cerr << "\033[1;36m[SYSTEM MONITOR]\033[0m "
-                  << "VIS Queue: " << std::setw(2) << vis_q << " | "
-                  << "VIS Proc: [" << std::setw(2) << vis_p << "/" << max_vis << "] | "
-                  << "LLM Queue: " << std::setw(2) << llm_q << " | "
-                  << "LLM Proc: [" << std::setw(2) << llm_p << "/" << max_llm << "]"
-                  << "\033[K";
-
-        std::cerr << "\n\033[1;30m" << std::string(80, '-') << "\033[0m\033[K";
-        std::cerr << "\033[u" << std::flush;
+        monitor_file.seekp(0);
+        monitor_file << "VIS Queue: " << vis_q << "\n"
+                    << "VIS Proc: [" << vis_p << "/" << max_vis << "]\n"
+                    << "LLM Queue: " << llm_q << "\n"
+                    << "LLM Proc: [" << llm_p << "/" << max_llm << "]" << std::endl;
     }
 
 };

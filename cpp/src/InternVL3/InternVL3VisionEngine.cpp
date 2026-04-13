@@ -16,7 +16,7 @@ InternVL3VisionEngine::InternVL3VisionEngine(
     const ModelConfig& config,
     const cudaStream_t& stream
 ): m_config(config), m_stream(stream) {
-    tokens_per_patch = m_config.patch_token_size * m_config.embedding_dim; // [256, 896]
+    tokens_per_patch = m_config.patch_tokens * m_config.embedding_dim; // [256, 896]
     max_out_elements = m_config.max_vis_batch * tokens_per_patch; // [max_vis_batch, 256, 896]
     pixels_per_patch = 3 * m_config.patch_size * m_config.patch_size; // [3, 448, 448]
 

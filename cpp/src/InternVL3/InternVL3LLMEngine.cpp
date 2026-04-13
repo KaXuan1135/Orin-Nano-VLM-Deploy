@@ -36,7 +36,7 @@ tle::Request create_request_from_dict(
         total_all_patches += vf.total_patches();
     }
     
-    size_t total_tokens = total_all_patches * m_config.patch_token_size;
+    size_t total_tokens = total_all_patches * m_config.patch_tokens;
     size_t embedding_dim = m_config.embedding_dim;
     
     size_t element_size = 2; // assume bf16 or fp16
@@ -46,7 +46,7 @@ tle::Request create_request_from_dict(
 
     size_t offset_bytes = 0;
     for (const auto& vf : vis_features) {
-        size_t current_bytes = vf.total_patches() * m_config.patch_token_size * embedding_dim * element_size;
+        size_t current_bytes = vf.total_patches() * m_config.patch_tokens * embedding_dim * element_size;
         cudaMemcpy((char*)d_combined_ptr + offset_bytes, vf.embeddings_ptr.get(), current_bytes, cudaMemcpyDeviceToDevice);
         offset_bytes += current_bytes;
     }
@@ -105,14 +105,14 @@ tle::Request create_request_from_dict_async(
     size_t total_tokens;
     if (vis_features.size() == 1) {
         d_combined_ptr = vis_features[0].embeddings_ptr.get();
-        total_tokens = vis_features[0].total_patches() * m_config.patch_token_size;
+        total_tokens = vis_features[0].total_patches() * m_config.patch_tokens;
     } else {
         size_t total_all_patches = 0;
         for (const auto& vf : vis_features) {
             total_all_patches += vf.total_patches();
         }
         
-        total_tokens = total_all_patches * m_config.patch_token_size;
+        total_tokens = total_all_patches * m_config.patch_tokens;
         size_t embedding_dim = m_config.embedding_dim;
         
         size_t element_size = 2; // assume bf16 or fp16
@@ -122,7 +122,7 @@ tle::Request create_request_from_dict_async(
         
         size_t offset_bytes = 0;
         for (const auto& vf : vis_features) {
-            size_t current_bytes = vf.total_patches() * m_config.patch_token_size * embedding_dim * element_size;
+            size_t current_bytes = vf.total_patches() * m_config.patch_tokens * embedding_dim * element_size;
             cudaMemcpyAsync((char*)d_combined_ptr + offset_bytes, vf.embeddings_ptr.get(), current_bytes, cudaMemcpyDeviceToDevice, m_stream);
             offset_bytes += current_bytes;
         }
@@ -221,10 +221,28 @@ InternVL3LLMEngine::InternVL3LLMEngine(
 
     initTrtLlmPlugins();
 
+    tensorrt_llm::executor::KvCacheConfig kvCacheConfig;
+    kvCacheConfig.setFreeGpuMemoryFraction(m_config.kv_cache_reserved_space); 
+
+    tensorrt_llm::executor::ExecutorConfig executorConfig(m_config.max_beam_width);
+    executorConfig.setKvCacheConfig(kvCacheConfig);
+
+    tensorrt_llm::executor::SchedulerConfig schedulerConfig;
+
+    schedulerConfig.setCapacitySchedulerPolicy(
+        tensorrt_llm::executor::CapacitySchedulerPolicy::kMAX_UTILIZATION
+    );
+
+    schedulerConfig.setContextChunkingPolicy(
+        tensorrt_llm::executor::ContextChunkingPolicy::kFIRST_COME_FIRST_SERVED
+    );
+
+    executorConfig.setSchedulerConfig(schedulerConfig);
+
     llm_executor = std::make_unique<tensorrt_llm::executor::Executor>(
         m_config.llm_engine_path, 
         tensorrt_llm::executor::ModelType::kDECODER_ONLY,
-        tensorrt_llm::executor::ExecutorConfig(m_config.max_beam_width)
+        executorConfig
     );
 
     tokenizer = tokenizers::Tokenizer::FromBlobJSON(read_file(m_config.tokenizer_path));
@@ -352,10 +370,10 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
             auto pre_img_tokens = tokenizer->Encode(prefix);
             for (auto tid : pre_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
 
-            for (int j = 0; j < m_config.patch_token_size * handle->visual_features.image_patch_counts[i]; ++j) {
+            for (int j = 0; j < m_config.patch_tokens * handle->visual_features.image_patch_counts[i]; ++j) {
                 input_ids.push_back(cur_fake_id + j);
             }
-            cur_fake_id += m_config.patch_token_size * handle->visual_features.image_patch_counts[i];
+            cur_fake_id += m_config.patch_tokens * handle->visual_features.image_patch_counts[i];
 
             auto post_img_tokens = tokenizer->Encode(config.image_postfix);
             for (auto tid : post_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
@@ -388,7 +406,7 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
             auto pre_img_tokens = tokenizer->Encode(prefix);
             count += pre_img_tokens.size();
 
-            count += m_config.patch_token_size * handle->visual_features.image_patch_counts[i];
+            count += m_config.patch_tokens * handle->visual_features.image_patch_counts[i];
 
             auto post_img_tokens = tokenizer->Encode(config.image_postfix);
             count += post_img_tokens.size();
@@ -436,7 +454,7 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
                 auto pre_img_tokens = tokenizer->Encode(prefix);
                 cur_count += pre_img_tokens.size();
 
-                cur_count += m_config.patch_token_size * cur_handle->visual_features.image_patch_counts[j];
+                cur_count += m_config.patch_tokens * cur_handle->visual_features.image_patch_counts[j];
 
                 auto post_img_tokens = tokenizer->Encode(config.image_postfix);
                 cur_count += post_img_tokens.size();
@@ -486,10 +504,10 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
                 auto pre_img_tokens = tokenizer->Encode(prefix);
                 for (auto tid : pre_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
 
-                for (int k = 0; k < m_config.patch_token_size * cur_handle->visual_features.image_patch_counts[j]; ++k) {
+                for (int k = 0; k < m_config.patch_tokens * cur_handle->visual_features.image_patch_counts[j]; ++k) {
                     input_ids.push_back(cur_fake_id + k);
                 }
-                cur_fake_id += m_config.patch_token_size * cur_handle->visual_features.image_patch_counts[j];
+                cur_fake_id += m_config.patch_tokens * cur_handle->visual_features.image_patch_counts[j];
 
                 auto post_img_tokens = tokenizer->Encode(config.image_postfix);
                 for (auto tid : post_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
@@ -523,10 +541,10 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
             auto pre_img_tokens = tokenizer->Encode(prefix);
             for (auto tid : pre_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
 
-            for (int k = 0; k < m_config.patch_token_size * handle->visual_features.image_patch_counts[j]; ++k) {
+            for (int k = 0; k < m_config.patch_tokens * handle->visual_features.image_patch_counts[j]; ++k) {
                 input_ids.push_back(cur_fake_id + k);
             }
-            cur_fake_id += m_config.patch_token_size * handle->visual_features.image_patch_counts[j];
+            cur_fake_id += m_config.patch_tokens * handle->visual_features.image_patch_counts[j];
 
             auto post_img_tokens = tokenizer->Encode(config.image_postfix);
             for (auto tid : post_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
