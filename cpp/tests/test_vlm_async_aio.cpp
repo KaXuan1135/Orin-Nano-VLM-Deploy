@@ -11,7 +11,7 @@
 
 int main(int argc, char** argv) {
 
-    int request_num = 50; // 100
+    int request_num = 100; // 100
 
     std::string inputText = "Can you describe the 6 images?";
 
@@ -26,7 +26,8 @@ int main(int argc, char** argv) {
 
     trt_multimodal::ModelConfig m_config = trt_multimodal::ModelConfig(
         trt_multimodal::ModelType::Type::INTERNVL3,
-        "/mnt/sdcard/models/InternVL3-1B_i8_float16"
+        "/mnt/sdcard/models/InternVL3-1B_fp16_w(i8)a(bf16)_kv(bf16)"
+        // "/mnt/sdcard/models/InternVL3-1B_fp16_w(i4)a(bf16)_kv(bf16)"
     );
 
     trt_multimodal::GenerateConfig gen_config = trt_multimodal::GenerateConfig();

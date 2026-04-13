@@ -62,9 +62,10 @@ struct ModelConfig {
     int32_t max_input_len = -1;
     int32_t max_num_frames = -1;
     int32_t embedding_dim = -1;
+    float kv_cache_reserved_space = 0.8f;
 
     int32_t max_vis_batch = -1;
-    int32_t patch_token_size = 256; // TODO : where can i extract get patch token size?
+    int32_t patch_tokens = -1;
     int32_t patch_size = 448; // TODO : where can i extract get patch_size?
 
     ModelConfig(
@@ -87,7 +88,7 @@ struct ModelConfig {
         config = nlohmann::json::parse(f_vis);
         max_num_frames = config["builder_config"]["max_num_frames"];
         max_vis_batch = config["builder_config"]["vis_batch_size"];
-        // TODO : where can i extract get patch token size?
+        patch_tokens = config["builder_config"]["patch_tokens"];
         // TODO : where can i extract get patch_size?
     };
 
