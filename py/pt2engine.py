@@ -53,7 +53,7 @@ LOAD_MODEL_ON_CPU = True
 USE_PARALLEL_EMBEDDING = True
 INT8_KV_CACHE = False
 USE_WEIGHT_ONLY = True
-assert (WEIGHT_ONLY_PRECISION := 'int8') in (WEIGHT_ONLY_PRECISION_CHOICES := ['int8', 'int4', 'int4_gptq'])
+assert (WEIGHT_ONLY_PRECISION := 'int4') in (WEIGHT_ONLY_PRECISION_CHOICES := ['int8', 'int4', 'int4_gptq'])
 assert (LLM_DTYPE := 'bfloat16') in (LLM_DTYPE_CHOICES := ['float32', 'bfloat16', 'float16'])
 assert (ENABLE_XQA := 'enable') in (BINARY_CHOICES := ['enable', 'disable'])
 assert (CONTEXT_FMHA := 'enable') in BINARY_CHOICES # flash attention

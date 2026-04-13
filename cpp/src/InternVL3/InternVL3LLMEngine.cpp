@@ -227,13 +227,8 @@ InternVL3LLMEngine::InternVL3LLMEngine(
     tensorrt_llm::executor::ExecutorConfig executorConfig(m_config.max_beam_width);
     executorConfig.setKvCacheConfig(kvCacheConfig);
 
-    tensorrt_llm::executor::SchedulerConfig schedulerConfig;
-
-    schedulerConfig.setCapacitySchedulerPolicy(
-        tensorrt_llm::executor::CapacitySchedulerPolicy::kMAX_UTILIZATION
-    );
-
-    schedulerConfig.setContextChunkingPolicy(
+    tensorrt_llm::executor::SchedulerConfig schedulerConfig(
+        tensorrt_llm::executor::CapacitySchedulerPolicy::kMAX_UTILIZATION,
         tensorrt_llm::executor::ContextChunkingPolicy::kFIRST_COME_FIRST_SERVED
     );
 
