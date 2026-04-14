@@ -223,6 +223,7 @@ InternVL3LLMEngine::InternVL3LLMEngine(
 
     tensorrt_llm::executor::KvCacheConfig kvCacheConfig;
     kvCacheConfig.setFreeGpuMemoryFraction(m_config.kv_cache_reserved_space); 
+    kvCacheConfig.setEnableBlockReuse(true);
 
     tensorrt_llm::executor::ExecutorConfig executorConfig(m_config.max_beam_width);
     executorConfig.setKvCacheConfig(kvCacheConfig);
