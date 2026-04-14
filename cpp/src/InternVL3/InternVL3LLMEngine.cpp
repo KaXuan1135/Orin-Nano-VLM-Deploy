@@ -221,23 +221,25 @@ InternVL3LLMEngine::InternVL3LLMEngine(
 
     initTrtLlmPlugins();
 
-    tensorrt_llm::executor::KvCacheConfig kvCacheConfig;
-    kvCacheConfig.setFreeGpuMemoryFraction(m_config.kv_cache_reserved_space); 
+    // tensorrt_llm::executor::KvCacheConfig kvCacheConfig;
+    // kvCacheConfig.setFreeGpuMemoryFraction(m_config.kv_cache_reserved_space); 
+    // kvCacheConfig.setEnableBlockReuse(true);
 
-    tensorrt_llm::executor::ExecutorConfig executorConfig(m_config.max_beam_width);
-    executorConfig.setKvCacheConfig(kvCacheConfig);
+    // tensorrt_llm::executor::ExecutorConfig executorConfig(m_config.max_beam_width);
+    // executorConfig.setKvCacheConfig(kvCacheConfig);
 
-    tensorrt_llm::executor::SchedulerConfig schedulerConfig(
-        tensorrt_llm::executor::CapacitySchedulerPolicy::kMAX_UTILIZATION,
-        tensorrt_llm::executor::ContextChunkingPolicy::kFIRST_COME_FIRST_SERVED
-    );
+    // tensorrt_llm::executor::SchedulerConfig schedulerConfig(
+    //     tensorrt_llm::executor::CapacitySchedulerPolicy::kMAX_UTILIZATION,
+    //     tensorrt_llm::executor::ContextChunkingPolicy::kFIRST_COME_FIRST_SERVED
+    // );
 
-    executorConfig.setSchedulerConfig(schedulerConfig);
+    // executorConfig.setSchedulerConfig(schedulerConfig);
 
     llm_executor = std::make_unique<tensorrt_llm::executor::Executor>(
         m_config.llm_engine_path, 
         tensorrt_llm::executor::ModelType::kDECODER_ONLY,
-        executorConfig
+        // executorConfig
+        tensorrt_llm::executor::ExecutorConfig(m_config.max_beam_width)
     );
 
     tokenizer = tokenizers::Tokenizer::FromBlobJSON(read_file(m_config.tokenizer_path));
