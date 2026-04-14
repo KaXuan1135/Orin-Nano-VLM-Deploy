@@ -1,6 +1,8 @@
+#include <ctime>
 #include <vector>
 #include <string>
 #include <thread>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <filesystem>
@@ -11,7 +13,9 @@
 
 int main(int argc, char** argv) {
 
-    int request_num = 5; // 100
+    std::srand(std::time(nullptr));
+    
+    int request_num = 10; // 100
 
     std::string inputText = "Can you describe the 6 images?";
 
@@ -85,8 +89,6 @@ int main(int argc, char** argv) {
         aio_handles
     );
 
-    std::cout << aio_handles[4]->generate_result.outputs_text[0] << std::endl;
-
+    std::cout << aio_handles[std::rand() % request_num]->generate_result.outputs_text[0] << std::endl;
     return 0;
-
 }
