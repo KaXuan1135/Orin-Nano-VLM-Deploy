@@ -137,7 +137,21 @@ tle::Request create_request_from_dict_async(
         }
     );
 
-    std::optional<tle::PromptTuningConfig> pTuningConfig = tle::PromptTuningConfig(embedding);
+    std::optional<tle::PromptTuningConfig> pTuningConfig = std::nullopt;
+
+    if (!vis_features.empty() && total_tokens > 0) {
+        tle::Tensor embedding = tle::Tensor::of(
+            tle::DataType::kBF16,
+            d_combined_ptr,
+            tle::Shape{
+                static_cast<long int>(total_tokens), 
+                static_cast<long int>(m_config.embedding_dim)
+            }
+        );
+        pTuningConfig = tle::PromptTuningConfig(embedding);
+    } else {
+        std::cout << "no pass ah" << std::endl;
+    }
 
     tle::Request request(
         input_ids,                             // 1. VecTokens
@@ -151,11 +165,11 @@ tle::Request create_request_from_dict_async(
         std::nullopt,                          // 9. stopWords
         std::nullopt,                          // 10. std::optional<Tensor> embeddingBias
         std::nullopt,                          // 11. std::optional<ExternalDraftTokensConfig>
-        pTuningConfig,                         // 12. PromptTuningConfig (图像特征)
+        pTuningConfig,                         // 12. std::optional<PromptTuningConfig>
         std::nullopt,                          // 13. std::optional<LoraConfig>
-        std::nullopt,                          // 14. std::optional<std::string> lookaheadConfig
-        std::nullopt,                          // 15. std::optional<std::vector<int>> taskVocabSize
-        std::nullopt,                          // 16. std::optional<uint64_t> schedulerPolicyData
+        std::nullopt,                          // 14. std::optional<std::string> logitsPostProcessorName
+        std::nullopt,                          // 15. std::optional<std::vector<int>> encoderInputTokenIds
+        std::nullopt,                          // 16. std::optional<IdType> clientId
         false,                                 // 17. bool returnAllGeneratedTokens
         0.0f                                   // 18. PriorityType priority 
     );
@@ -345,8 +359,8 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
     if (handle->history_handles.size() == 0) {
         all_vis_feats.push_back(handle->visual_features);
         std::string pre_prompt = "<|im_start|>system\n" + config.system_prompt + "<|im_end|>\n<|im_start|>user\n";
-
         auto pre_tokens = tokenizer->Encode(pre_prompt);
+        std::cout << "pre_prompt length : " << pre_tokens.size() << std::endl;
         for (auto tid : pre_tokens) input_ids.push_back(static_cast<int32_t>(tid));
 
         for (int i = 0; i < handle->visual_features.image_patch_counts.size(); ++i) {
@@ -365,18 +379,22 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
 
             auto pre_img_tokens = tokenizer->Encode(prefix);
             for (auto tid : pre_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+            std::cout << "pre_img " << i << " length : " << pre_img_tokens.size() << std::endl;
 
             for (int j = 0; j < m_config.patch_tokens * handle->visual_features.image_patch_counts[i]; ++j) {
                 input_ids.push_back(cur_fake_id + j);
             }
             cur_fake_id += m_config.patch_tokens * handle->visual_features.image_patch_counts[i];
+            std::cout << "img " << i << " length : " << m_config.patch_tokens * handle->visual_features.image_patch_counts[i] << std::endl;
 
             auto post_img_tokens = tokenizer->Encode(config.image_postfix);
             for (auto tid : post_img_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+            std::cout << "post_img " << i << " length : " << post_img_tokens.size() << std::endl;
         }
 
         auto post_tokens = tokenizer->Encode(post_prompt);
         for (auto tid : post_tokens) input_ids.push_back(static_cast<int32_t>(tid));
+        std::cout << "post_prompt length : " << post_tokens.size() << std::endl;
 
     } else {
         size_t count = 0;
@@ -425,7 +443,6 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
 
             auto const& cur_handle = handle->history_handles[i];
             
-
             std::string cur_req_prompt = "<|im_start|>user\n" + cur_handle->generate_result.user_prompt + "<|im_end|>\n";
             cur_req_prompt += "<|im_start|>assistant\n" + cur_handle->generate_result.outputs_text[0] + "<|im_end|>\n";
             std::vector<int32_t> cur_req_prompt_token = tokenizer->Encode(cur_req_prompt);
@@ -565,6 +582,7 @@ void InternVL3LLMEngine::enqueue_generate_from_features(
         handle->generate_result.image_embeddings_gpu_ptr
     );
 
+    std::cout << "Enqueue another Request with length " << input_ids.size() << std::endl;
     std::uint64_t request_id = llm_executor->enqueueRequest(request);
 
     handle->generate_result.request_id = request_id;

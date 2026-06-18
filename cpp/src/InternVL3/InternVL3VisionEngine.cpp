@@ -149,6 +149,7 @@ void InternVL3VisionEngine::extract_visual_features(
     // Greedy Approach
     size_t cur_patch_count = 0;
     size_t done_patch_count = 0;
+    // Each time preprocess  all grid of each images
     for (size_t img_idx = 0; img_idx < images.size(); ++img_idx) {
         cv::Mat img = images[img_idx];
         

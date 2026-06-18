@@ -5,17 +5,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_ARCHITECTURES 87)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-
+set(DEVELOPMENT ON)
 set(TRT_LLM_ROOT "/home/pi/kx/TensorRT-LLM" CACHE PATH "Path to TensorRT-LLM root directory")
-message(STATUS "[Internal] Using TRT_LLM_ROOT: ${TRT_LLM_ROOT}")
 
-#if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
-#    message(STATUS "[Internal] Setting up Rust/Cargo toolchain for aarch64...")
-#    set(ENV{CC} "gcc")
-#    set(ENV{CXX} "g++")
-#    set(ENV{AR} "ar")
-#    set(ENV{CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER} "gcc")
-#endif()
+message(STATUS "[Internal] Using TRT_LLM_ROOT: ${TRT_LLM_ROOT}")
 
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
     set(ENV{CC} "gcc")
@@ -27,14 +20,23 @@ endif()
 find_package(CUDA REQUIRED)
 find_package(OpenCV REQUIRED)
 
-find_library(TRT_LLM_LIB
-    NAMES tensorrt_llm
-    PATHS "${TRT_LLM_ROOT}/tensorrt_llm/libs"
-    REQUIRED
+if(DEVELOPMENT)
+    set(TRT_LLM_LIB_DIR "${TRT_LLM_ROOT}/cpp/build/tensorrt_llm")
+    set(TRT_LLM_PLUGIN_DIR "${TRT_LLM_ROOT}/cpp/build/tensorrt_llm/plugins")
+else()
+    set(TRT_LLM_LIB_DIR "${TRT_LLM_ROOT}/tensorrt_llm/libs")
+    set(TRT_LLM_PLUGIN_DIR "${TRT_LLM_ROOT}/tensorrt_llm/libs")
+endif()
+
+find_library(TRT_LLM_LIB 
+    NAMES tensorrt_llm 
+    PATHS ${TRT_LLM_LIB_DIR} 
+    NO_DEFAULT_PATH
 )
+
 find_library(TRT_LLM_PLUGIN_LIB 
-    NAMES nvinfer_plugin_tensorrt_llm
-    PATHS "${TRT_LLM_ROOT}/cpp/build/tensorrt_llm/plugins"
+    NAMES nvinfer_plugin_tensorrt_llm 
+    PATHS ${TRT_LLM_PLUGIN_DIR} 
     NO_DEFAULT_PATH
 )
 
@@ -63,11 +65,14 @@ target_link_libraries(${PROJECT_NAME}
 
 add_subdirectory(bindings)
 
-add_executable(test_vlm_sync tests/test_vlm_sync.cpp)
-target_link_libraries(test_vlm_sync PRIVATE ${PROJECT_NAME})
+# add_executable(test_vlm_sync tests/test_vlm_sync.cpp)
+# target_link_libraries(test_vlm_sync PRIVATE ${PROJECT_NAME})
 
-add_executable(test_vlm_async tests/test_vlm_async.cpp)
-target_link_libraries(test_vlm_async PRIVATE ${PROJECT_NAME})
+# add_executable(test_vlm_async tests/test_vlm_async.cpp)
+# target_link_libraries(test_vlm_async PRIVATE ${PROJECT_NAME})
 
-add_executable(test_vlm_async_aio tests/test_vlm_async_aio.cpp)
-target_link_libraries(test_vlm_async_aio PRIVATE ${PROJECT_NAME})
+# add_executable(test_vlm_async_aio tests/test_vlm_async_aio.cpp)
+# target_link_libraries(test_vlm_async_aio PRIVATE ${PROJECT_NAME})
+
+add_executable(test_vlm_prefix_caching tests/test_vlm_prefix_caching.cpp)
+target_link_libraries(test_vlm_prefix_caching PRIVATE ${PROJECT_NAME})

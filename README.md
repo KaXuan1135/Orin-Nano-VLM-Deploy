@@ -64,7 +64,7 @@ pip freeze | grep -E "torch|numpy" > ./build_env/constraints.txt
 export PIP_CONSTRAINT=$(pwd)/build_env/constraints.txt
 
 # Temporary increase memory with swap space
-sudo dd if=/dev/zero of=/var/swap_temp.img bs=1M count=30720
+sudo fallocate -l 30G /var/swap_temp.img
 sudo chmod 600 /var/swap_temp.img
 sudo mkswap /var/swap_temp.img
 sudo swapon /var/swap_temp.img
@@ -108,7 +108,14 @@ make -j$(nproc)
 ```bash
 ./test_vlm_sync
 ./test_vlm_async
+./test_vlm_async_aio
 ```
+
+### Unexpected Error
+
+something like cuTensor error, it happens unexpectedly, some time it cause this error.
+Then trr lowering the batch and the max_new_tokens, and when it run succesfullly, gradually increase the number until it reach the previous high one, it now miraclely work again.
+
 
 # Conversion
 ```
@@ -254,6 +261,7 @@ LLM to Engine (trtllm-build)   | DONE       | 235s     | 2.15 GB | 17.70 GB
 ## Roadblocks
 1. InternVL 3.5 Mismatch: Direct weight migration currently fails. Standard "forced alignment" results in corrupted output. A dedicated conversion script for the 3.5 architecture is necessary to align the layer mapping correctly.
 2. The conversion of InternVL3-2B-INT8 to a TensorRT engine on the Orin Nano (8GB) is inconsistent. Even with a 50GB swap file, the process may crash or produce a "partially complete" yet functional .engine file.
+3. KV Blocks Reuse for multimodal failed in this tensorrt-llm branch. TLDR : some modules for this branch is closed-sources, nothing i can do on this issue.
 
 ## Further Optimized Path
 1. Quantized using AWQ can further increase the accuracy and precision of model.
